@@ -72,7 +72,8 @@ const UserSchema = new Schema<IUser>(
   { collection: 'users', timestamps: true }
 );
 
-const User = mongoose.models.User || mongoose.model<IUser>('User', UserSchema);
+const User: mongoose.Model<IUser> =
+  (mongoose.models.User as mongoose.Model<IUser>) || mongoose.model<IUser>('User', UserSchema);
 
 interface ICallSession extends Document {
   callId: string;
@@ -118,8 +119,9 @@ const CallSessionSchema = new Schema<ICallSession>(
   { collection: 'callsessions', timestamps: true }
 );
 
-const CallSession =
-  mongoose.models.CallSession || mongoose.model<ICallSession>('CallSession', CallSessionSchema);
+const CallSession: mongoose.Model<ICallSession> =
+  (mongoose.models.CallSession as mongoose.Model<ICallSession>) ||
+  mongoose.model<ICallSession>('CallSession', CallSessionSchema);
 
 interface ICommunityRoom extends Document {
   roomId: string;
@@ -156,8 +158,9 @@ const CommunityRoomSchema = new Schema<ICommunityRoom>(
   { collection: 'communityrooms', timestamps: true }
 );
 
-const CommunityRoom =
-  mongoose.models.CommunityRoom || mongoose.model<ICommunityRoom>('CommunityRoom', CommunityRoomSchema);
+const CommunityRoom: mongoose.Model<ICommunityRoom> =
+  (mongoose.models.CommunityRoom as mongoose.Model<ICommunityRoom>) ||
+  mongoose.model<ICommunityRoom>('CommunityRoom', CommunityRoomSchema);
 
 // ─────────────────────────────────────────────────────────────
 // 2. EXPRESS & HTTP SETUP
@@ -232,6 +235,7 @@ export interface ICircleActiveUser {
 }
 
 const activeUsersCache = new Map<string, ICircleActiveUser>();
+let cachedCommunityRooms: any[] = [];
 
 function getCachedActiveUsersList(): ICircleActiveUser[] {
   return Array.from(activeUsersCache.values()).sort(
@@ -333,7 +337,7 @@ async function fetchCommunityRoomsWithCounts() {
       getLiveKitRoomCounts(),
     ]);
 
-    return dbRooms.map((r: any) => {
+    const mappedRooms = dbRooms.map((r: any) => {
       const rId = r.roomId || r.id;
       const dbId = r._id ? r._id.toString() : '';
 
@@ -363,9 +367,14 @@ async function fetchCommunityRoomsWithCounts() {
         tags: r.tags || [],
       };
     });
+
+    if (mappedRooms.length > 0) {
+      cachedCommunityRooms = mappedRooms;
+    }
+    return mappedRooms;
   } catch (err) {
     console.warn('[fetchCommunityRoomsWithCounts Error]:', err);
-    return [];
+    return cachedCommunityRooms;
   }
 }
 
@@ -412,7 +421,7 @@ io.use((socket: Socket, next) => {
   next();
 });
 
-io.on('connection', async (socket: Socket) => {
+io.on('connection', (socket: Socket) => {
   const userId = socket.data.userId;
 
   if (userId) {
@@ -425,30 +434,41 @@ io.on('connection', async (socket: Socket) => {
     }
     userSocketsMap.get(userId)!.add(socket.id);
 
-    // Send user's own current active status from DB
-    try {
-      const dbUser = await User.findById(userId).select('isCallActive gender profession callLanguage').lean();
-      if (dbUser) {
-        socket.emit('circle:my_status_init', {
-          isCallActive: Boolean((dbUser as any).isCallActive),
-          gender: (dbUser as any).gender,
-          profession: (dbUser as any).profession,
-          callLanguage: (dbUser as any).callLanguage,
-        });
-      }
-    } catch { }
+    // Send user's own current active status from DB asynchronously (never blocks socket setup)
+    User.findById(userId)
+      .select('isCallActive gender profession callLanguage')
+      .lean()
+      .then((dbUser) => {
+        if (dbUser) {
+          socket.emit('circle:my_status_init', {
+            isCallActive: Boolean((dbUser as any).isCallActive),
+            gender: (dbUser as any).gender,
+            profession: (dbUser as any).profession,
+            callLanguage: (dbUser as any).callLanguage,
+          });
+        }
+      })
+      .catch(() => {});
   }
 
-  // Send initial data to this connected socket immediately
-  try {
-    const [users, rooms] = await Promise.all([
-      fetchActiveCircleUsers(),
-      fetchCommunityRoomsWithCounts(),
-    ]);
-    socket.emit('circle:users_updated', { users });
-    socket.emit('circle:rooms_updated', { rooms });
-  } catch (err) {
-    console.error('[Socket Initial State Error]:', err);
+  // 1. EMIT INSTANT INITIAL DATA FROM CACHE (0ms DELAY)
+  socket.emit('circle:users_updated', { users: getCachedActiveUsersList() });
+  socket.emit('circle:rooms_updated', { rooms: cachedCommunityRooms });
+
+  // 2. Refresh cache asynchronously in background if cold
+  if (activeUsersCache.size === 0) {
+    syncActiveUsersFromDB()
+      .then(() => {
+        socket.emit('circle:users_updated', { users: getCachedActiveUsersList() });
+      })
+      .catch(() => {});
+  }
+  if (cachedCommunityRooms.length === 0) {
+    fetchCommunityRoomsWithCounts()
+      .then((rooms) => {
+        socket.emit('circle:rooms_updated', { rooms });
+      })
+      .catch(() => {});
   }
 
   // ── A. Toggle "Take Calls" (Online/Offline Status) ───────────
@@ -822,6 +842,51 @@ app.get('/api/circle/community/rooms', async (_req: Request, res: Response) => {
   }
 });
 
+// POST /api/internal/circle/sync-active (Instant sync from Next.js or React Native)
+app.post('/api/internal/circle/sync-active', async (req: Request, res: Response) => {
+  try {
+    const { userId, user, isCallActive, gender, profession, callLanguage, callCategory } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing userId' });
+    }
+
+    const activeState = Boolean(isCallActive);
+    if (activeState) {
+      const existing = activeUsersCache.get(userId);
+      activeUsersCache.set(userId, {
+        id: userId,
+        _id: userId,
+        name: user?.name || existing?.name || 'మిత్రులు',
+        teluguName: user?.teluguName || existing?.teluguName || user?.name || 'మిత్రులు',
+        handle: user?.mitraId || user?.handle || existing?.handle || 'user',
+        mitraId: user?.mitraId || user?.handle || existing?.mitraId || 'user',
+        avatar: user?.avatar || existing?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop',
+        bio: user?.bio || existing?.bio || '',
+        teluguBio: user?.teluguBio || existing?.teluguBio || '',
+        location: user?.location || existing?.location || 'హైదరాబాద్',
+        isVerified: Boolean(user?.isVerified ?? existing?.isVerified),
+        gender: gender || user?.gender || existing?.gender || 'prefer_not_to_say',
+        profession: profession || user?.profession || existing?.profession || 'కమ్యూనిటీ మిత్రులు',
+        callCategory: callCategory || user?.callCategory || existing?.callCategory || 'casuals',
+        isCallActive: true,
+        callLanguage: callLanguage || user?.callLanguage || existing?.callLanguage || 'తెలుగు (Telugu)',
+        callRating: user?.callRating ?? existing?.callRating ?? 5.0,
+        callRatingCount: user?.callRatingCount ?? existing?.callRatingCount ?? 0,
+        callRateCoins: user?.callRateCoins ?? existing?.callRateCoins ?? 500,
+        isOnline: true,
+        callActiveAt: Date.now(),
+      });
+    } else {
+      activeUsersCache.delete(userId);
+    }
+
+    broadcastActiveUsersInstant();
+    res.json({ success: true, count: activeUsersCache.size });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/circle/active-status
 app.post('/api/circle/active-status', async (req: Request, res: Response) => {
   try {
@@ -834,21 +899,53 @@ app.post('/api/circle/active-status', async (req: Request, res: Response) => {
     }
 
     const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-    const { isCallActive, gender, profession, callLanguage, callCategory } = req.body;
+    const { isCallActive, gender, profession, callLanguage, callCategory, user: clientUser } = req.body;
+    const uid = decoded.userId;
+    const activeState = Boolean(isCallActive);
+
+    // Update in-memory cache instantly
+    if (activeState) {
+      const existing = activeUsersCache.get(uid);
+      activeUsersCache.set(uid, {
+        id: uid,
+        _id: uid,
+        name: clientUser?.name || existing?.name || decoded.name || 'మిత్రులు',
+        teluguName: clientUser?.teluguName || existing?.teluguName || 'మిత్రులు',
+        handle: clientUser?.mitraId || clientUser?.handle || existing?.handle || decoded.handle || 'user',
+        mitraId: clientUser?.mitraId || clientUser?.handle || existing?.mitraId || decoded.handle || 'user',
+        avatar: clientUser?.avatar || existing?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop',
+        bio: clientUser?.bio || existing?.bio || '',
+        teluguBio: clientUser?.teluguBio || existing?.teluguBio || '',
+        location: clientUser?.location || existing?.location || 'హైదరాబాద్',
+        isVerified: Boolean(clientUser?.isVerified ?? existing?.isVerified),
+        gender: gender || clientUser?.gender || existing?.gender || 'prefer_not_to_say',
+        profession: profession || clientUser?.profession || existing?.profession || 'కమ్యూనిటీ మిత్రులు',
+        callCategory: callCategory || clientUser?.callCategory || existing?.callCategory || 'casuals',
+        isCallActive: true,
+        callLanguage: callLanguage || clientUser?.callLanguage || existing?.callLanguage || 'తెలుగు (Telugu)',
+        callRating: clientUser?.callRating ?? existing?.callRating ?? 5.0,
+        callRatingCount: clientUser?.callRatingCount ?? existing?.callRatingCount ?? 0,
+        callRateCoins: clientUser?.callRateCoins ?? existing?.callRateCoins ?? 500,
+        isOnline: true,
+        callActiveAt: Date.now(),
+      });
+    } else {
+      activeUsersCache.delete(uid);
+    }
+
+    // Broadcast instant update to all connected WebSockets (0ms)
+    broadcastActiveUsersInstant();
 
     const updateFields: any = {
-      isCallActive: Boolean(isCallActive),
-      callActiveAt: isCallActive ? new Date() : null,
+      isCallActive: activeState,
+      callActiveAt: activeState ? new Date() : null,
     };
     if (gender) updateFields.gender = gender;
     if (profession) updateFields.profession = profession;
     if (callLanguage) updateFields.callLanguage = callLanguage;
     if (callCategory) updateFields.callCategory = callCategory;
 
-    const user = await User.findByIdAndUpdate(decoded.userId, updateFields, { new: true }).lean();
-
-    // Broadcast updated active list to all connected WebSocket clients
-    await broadcastActiveUsers();
+    const user = await User.findByIdAndUpdate(uid, updateFields, { new: true }).lean();
 
     res.json({
       success: true,
@@ -880,6 +977,12 @@ async function startServer() {
     console.log('[Mitrulu Server] Connecting to MongoDB...');
     await mongoose.connect(MONGO_URI);
     console.log('[Mitrulu Server] MongoDB Connected successfully.');
+
+    // Pre-warm in-memory cache so connected clients get 0ms instantaneous data
+    await syncActiveUsersFromDB();
+    fetchCommunityRoomsWithCounts().then((rooms) => {
+      cachedCommunityRooms = rooms;
+    }).catch(() => {});
 
     server.listen(PORT, () => {
       console.log(`[Mitrulu Server] Real-Time Circle Server running on port ${PORT}`);
