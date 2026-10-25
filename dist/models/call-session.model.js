@@ -55,6 +55,8 @@ exports.CallSessionSchema = new mongoose_1.Schema({
         index: true,
     },
     durationSeconds: { type: Number, default: 0 },
+    rating: { type: Number },
+    feedback: { type: String, default: '' },
     endedAt: { type: Date },
 }, { collection: 'callsessions', timestamps: true });
 exports.CallSessionModel = mongoose_1.default.models.CallSession ||

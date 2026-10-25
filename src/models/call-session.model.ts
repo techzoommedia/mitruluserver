@@ -15,6 +15,8 @@ export interface ICallSession extends Document {
   callType: 'audio' | 'video';
   status: 'ringing' | 'accepted' | 'declined' | 'ended' | 'timeout';
   durationSeconds?: number;
+  rating?: number;
+  feedback?: string;
   endedAt?: Date;
   createdAt?: Date;
   updatedAt?: Date;
@@ -41,6 +43,8 @@ export const CallSessionSchema = new Schema<ICallSession>(
       index: true,
     },
     durationSeconds: { type: Number, default: 0 },
+    rating: { type: Number },
+    feedback: { type: String, default: '' },
     endedAt: { type: Date },
   },
   { collection: 'callsessions', timestamps: true }
