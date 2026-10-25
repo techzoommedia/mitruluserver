@@ -4,7 +4,9 @@
   "description": "Real-time WebSockets and LiveKit Circle server for Mitrulu",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch index.ts",
+    "dev": "nodemon",
+    "dev:tsx": "nodemon --exec tsx src/index.ts",
+    "dev:ts-node": "nodemon --exec ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
@@ -27,6 +29,8 @@
     "@types/express": "^4.17.21",
     "@types/jsonwebtoken": "^9.0.6",
     "@types/node": "^20.12.7",
+    "nodemon": "^3.1.14",
+    "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   }
 }
