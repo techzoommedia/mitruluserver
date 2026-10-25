@@ -875,24 +875,30 @@ setInterval(async () => {
 // ─────────────────────────────────────────────────────────────
 // 6. SERVER INITIALIZATION
 // ─────────────────────────────────────────────────────────────
+async function connectMongoDBWithRetry() {
+    while (true) {
+        try {
+            console.log('[Mitrulu Server] Connecting to MongoDB...');
+            await mongoose_1.default.connect(MONGO_URI);
+            console.log('[Mitrulu Server] MongoDB Connected successfully.');
+            // Pre-warm in-memory cache so connected clients get 0ms instantaneous data
+            await syncActiveUsersFromDB();
+            fetchCommunityRoomsWithCounts().then((rooms) => {
+                cachedCommunityRooms = rooms;
+            }).catch(() => { });
+            break;
+        }
+        catch (err) {
+            console.warn('[Mitrulu Server] MongoDB connection failed, retrying in 3s...', err.message);
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+    }
+}
 async function startServer() {
-    try {
-        console.log('[Mitrulu Server] Connecting to MongoDB...');
-        await mongoose_1.default.connect(MONGO_URI);
-        console.log('[Mitrulu Server] MongoDB Connected successfully.');
-        // Pre-warm in-memory cache so connected clients get 0ms instantaneous data
-        await syncActiveUsersFromDB();
-        fetchCommunityRoomsWithCounts().then((rooms) => {
-            cachedCommunityRooms = rooms;
-        }).catch(() => { });
-        server.listen(PORT, () => {
-            console.log(`[Mitrulu Server] Real-Time Circle Server running on port ${PORT}`);
-            console.log(`[Mitrulu Server] WebSocket URL: ws://localhost:${PORT}`);
-        });
-    }
-    catch (err) {
-        console.error('[Mitrulu Server] Startup Error:', err);
-        process.exit(1);
-    }
+    server.listen(PORT, () => {
+        console.log(`[Mitrulu Server] Real-Time Circle Server running on port ${PORT}`);
+        console.log(`[Mitrulu Server] WebSocket URL: ws://localhost:${PORT}`);
+    });
+    connectMongoDBWithRetry().catch((e) => console.error('[Mitrulu Server] MongoDB loop error:', e));
 }
 startServer();
