@@ -305,15 +305,21 @@ io.use((socket, next) => {
         (socket.handshake.headers?.authorization?.startsWith('Bearer ')
             ? socket.handshake.headers.authorization.slice(7)
             : null);
+    const authUserId = socket.handshake.auth?.userId;
     if (token) {
         try {
             const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-            socket.data.userId = decoded.userId;
+            socket.data.userId = decoded.userId || decoded.id;
             socket.data.user = decoded;
         }
         catch (e) {
-            console.warn('[Socket Auth] Token verification failed for socket:', socket.id);
+            if (authUserId) {
+                socket.data.userId = authUserId;
+            }
         }
+    }
+    else if (authUserId) {
+        socket.data.userId = authUserId;
     }
     // Allow guests to connect in view mode; actions requiring auth check socket.data.userId
     next();
@@ -681,10 +687,20 @@ app.get('/health', (_req, res) => {
     });
 });
 // GET /api/circle/users
-app.get('/api/circle/users', async (_req, res) => {
+app.get('/api/circle/users', async (req, res) => {
     try {
-        const users = await fetchActiveCircleUsers();
-        res.json({ success: true, users });
+        const gender = req.query.gender || 'all';
+        const category = req.query.category || 'all';
+        let users = await fetchActiveCircleUsers();
+        if (gender !== 'all') {
+            users = users.filter((u) => u.gender === gender);
+        }
+        if (category !== 'all') {
+            const target = category.toLowerCase();
+            users = users.filter((u) => (u.profession || '').toLowerCase().includes(target) ||
+                (u.callCategory || '').toLowerCase().includes(target));
+        }
+        res.json({ success: true, users, count: users.length });
     }
     catch (error) {
         res.status(500).json({ error: error.message || 'Failed to fetch active users' });
@@ -743,6 +759,39 @@ app.post('/api/internal/circle/sync-active', async (req, res) => {
     catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+// POST /api/internal/circle/notify-incoming-call (Next.js -> mitruluserver -> target user socket)
+app.post('/api/internal/circle/notify-incoming-call', (req, res) => {
+    const { targetUserId, call } = req.body;
+    if (!targetUserId || !call) {
+        return res.status(400).json({ error: 'Missing targetUserId or call' });
+    }
+    console.log(`[CircleSocket] Forwarding incoming call alert to user_${targetUserId}`);
+    io.to(`user_${targetUserId}`).emit('call:incoming', call);
+    res.json({ success: true });
+});
+// POST /api/internal/circle/notify-call-response (Next.js -> mitruluserver -> caller socket)
+app.post('/api/internal/circle/notify-call-response', (req, res) => {
+    const { callerId, action, callId, roomName, token, serverUrl, callType, message } = req.body;
+    if (!callerId) {
+        return res.status(400).json({ error: 'Missing callerId' });
+    }
+    if (action === 'accept') {
+        io.to(`user_${callerId}`).emit('call:accepted', { callId, roomName, token, serverUrl, callType });
+    }
+    else {
+        io.to(`user_${callerId}`).emit('call:declined', { callId, message });
+    }
+    res.json({ success: true });
+});
+// POST /api/internal/circle/notify-call-end (Next.js -> mitruluserver -> both sockets)
+app.post('/api/internal/circle/notify-call-end', (req, res) => {
+    const { callId, callerId, targetUserId } = req.body;
+    if (callerId)
+        io.to(`user_${callerId}`).emit('call:ended', { callId });
+    if (targetUserId)
+        io.to(`user_${targetUserId}`).emit('call:ended', { callId });
+    res.json({ success: true });
 });
 // POST /api/circle/active-status
 app.post('/api/circle/active-status', async (req, res) => {
