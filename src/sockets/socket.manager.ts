@@ -362,6 +362,21 @@ export class SocketManager {
             this.userSocketsMap.get(userId)!.delete(socket.id);
             if (this.userSocketsMap.get(userId)!.size === 0) {
               this.userSocketsMap.delete(userId);
+
+              // User has closed Chrome or closed their tab
+              // Grace period of 3 seconds to differentiate between page refresh and closing browser
+              setTimeout(async () => {
+                if (!this.userSocketsMap.has(userId) || this.userSocketsMap.get(userId)!.size === 0) {
+                  console.log(`[CircleSocket] User ${userId} closed Chrome/Tab - marking INACTIVE and removing from active list`);
+                  userService.removeCacheUser(userId);
+                  try {
+                    await userService.updateActiveStatusViaHttp(userId, { isCallActive: false });
+                  } catch (e) {
+                    console.warn(`[CircleSocket] Error marking user ${userId} inactive on close:`, e);
+                  }
+                  this.broadcastActiveUsersInstant();
+                }
+              }, 3000);
             }
           }
         }
