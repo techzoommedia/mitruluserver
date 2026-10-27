@@ -343,6 +343,65 @@ export class SocketManager {
         }
       });
 
+      // ── Event: In-Call & Community 0-Latency Chat Relay ────────────
+      socket.on('call:chat_message', (data: { roomName?: string; roomId?: string; message: any }) => {
+        const targetRoom = data?.roomName || (data?.roomId ? `community_${data.roomId}` : null);
+        if (targetRoom) {
+          socket.to(targetRoom).emit('call:chat_message', data);
+        } else if (data?.message?.targetUserId) {
+          this.emitToUser(data.message.targetUserId, 'call:chat_message', data);
+        }
+      });
+
+      socket.on('community:chat_message', (data: { roomId: string; message: any }) => {
+        if (data?.roomId) {
+          socket.to(`community_${data.roomId}`).emit('call:chat_message', {
+            roomId: data.roomId,
+            roomName: `community_${data.roomId}`,
+            message: data.message,
+          });
+        }
+      });
+
+      // ── Event: Hand Raise Broadcast (0ms) ────────────────────────
+      socket.on('call:hand_raise', (data: { roomName?: string; roomId?: string; userId: string; name: string; isRaised: boolean; avatar?: string }) => {
+        const targetRoom = data?.roomName || (data?.roomId ? `community_${data.roomId}` : null);
+        if (targetRoom) {
+          socket.to(targetRoom).emit('call:hand_raise', data);
+        }
+      });
+
+      socket.on('community:raise_hand', (data: { roomId: string; userId: string; name: string; isRaised: boolean; avatar?: string }) => {
+        if (data?.roomId) {
+          socket.to(`community_${data.roomId}`).emit('call:hand_raise', {
+            roomId: data.roomId,
+            roomName: `community_${data.roomId}`,
+            ...data,
+          });
+        }
+      });
+
+      // ── Event: Microphone Mute Status Broadcast (0ms) ────────────
+      socket.on('call:mute_status', (data: { roomName?: string; roomId?: string; userId: string; isMuted: boolean }) => {
+        const targetRoom = data?.roomName || (data?.roomId ? `community_${data.roomId}` : null);
+        if (targetRoom) {
+          socket.to(targetRoom).emit('call:mute_status', data);
+        }
+      });
+
+      // ── Event: Join / Leave Call Socket Room ─────────────────────
+      socket.on('call:join_room', (data: { roomName: string }) => {
+        if (data?.roomName) {
+          socket.join(data.roomName);
+        }
+      });
+
+      socket.on('call:leave_room', (data: { roomName: string }) => {
+        if (data?.roomName) {
+          socket.leave(data.roomName);
+        }
+      });
+
       // ── Event: Client Requests Instant Fresh State ───────────────
       socket.on('circle:request_sync', async () => {
         socket.emit('circle:users_updated', { users: userService.getCachedActiveUsersList() });
