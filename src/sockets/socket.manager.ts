@@ -353,6 +353,20 @@ export class SocketManager {
         }
       });
 
+      // ── Event: Direct / Profile-wise Private Friend Chat Relay (0ms) ──
+      socket.on('direct:message', (data: { targetUserId: string; message: any }) => {
+        if (data?.targetUserId && data?.message) {
+          this.emitToUser(data.targetUserId, 'direct:message', data);
+        }
+      });
+
+      // ── Event: Direct Message Status Relay (delivered / seen) ────────
+      socket.on('direct:status', (data: { targetUserId: string; messageId?: string; status: 'delivered' | 'seen' }) => {
+        if (data?.targetUserId && data?.status) {
+          this.emitToUser(data.targetUserId, 'direct:status', data);
+        }
+      });
+
       socket.on('community:chat_message', (data: { roomId: string; message: any }) => {
         if (data?.roomId) {
           socket.to(`community_${data.roomId}`).emit('call:chat_message', {
@@ -360,6 +374,22 @@ export class SocketManager {
             roomName: `community_${data.roomId}`,
             message: data.message,
           });
+        }
+      });
+
+      // ── Event: 1-on-1 Direct Messaging (0ms Real-Time Relay) ─────
+      socket.on('direct:message', (data: { targetUserId: string; message: any }) => {
+        if (data?.targetUserId && data?.message) {
+          const targetRoom = `user_${data.targetUserId}`;
+          this.io?.to(targetRoom).emit('direct:message', data);
+        }
+      });
+
+      // ── Event: Direct Message Status (Delivered / Seen Receipts) ──
+      socket.on('direct:status', (data: { targetUserId: string; messageId?: string; status: string }) => {
+        if (data?.targetUserId) {
+          const targetRoom = `user_${data.targetUserId}`;
+          this.io?.to(targetRoom).emit('direct:status', data);
         }
       });
 
