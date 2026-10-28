@@ -1,9 +1,17 @@
 import { Router } from 'express';
 import { circleController } from '../controllers/circle.controller';
+import { socketManager } from '../sockets/socket.manager';
 
 const router = Router();
 
 // Public Circle routes
+router.get('/api/circle/online-users', (req, res) => {
+  res.json({
+    success: true,
+    onlineUserIds: socketManager.getOnlineUserIds(),
+    count: socketManager.getOnlineUsersCount(),
+  });
+});
 router.get('/api/circle/users', (req, res) => circleController.getActiveUsers(req, res));
 router.get('/api/circle/community/rooms', (req, res) => circleController.getCommunityRooms(req, res));
 router.post('/api/circle/community/rooms', (req, res) => circleController.joinCommunityRoom(req, res));

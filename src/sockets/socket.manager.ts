@@ -46,6 +46,16 @@ export class SocketManager {
     return this.userSocketsMap.size;
   }
 
+  getOnlineUserIds(): string[] {
+    return Array.from(this.userSocketsMap.keys());
+  }
+
+  broadcastOnlineUsers(): void {
+    if (!this.io) return;
+    const onlineUserIds = Array.from(this.userSocketsMap.keys());
+    this.io.emit('circle:online_users', { onlineUserIds });
+  }
+
   broadcastActiveUsersInstant(): void {
     if (!this.io) return;
     const users = userService.getCachedActiveUsersList();
@@ -109,17 +119,23 @@ export class SocketManager {
       const userId = socket.data.userId;
 
       if (userId) {
+        const uid = String(userId);
         // Join user's personal room for direct 1-on-1 signaling
-        const userRoom = `user_${userId}`;
+        const userRoom = `user_${uid}`;
         socket.join(userRoom);
 
-        if (!this.userSocketsMap.has(userId)) {
-          this.userSocketsMap.set(userId, new Set());
+        const wasOffline = !this.userSocketsMap.has(uid) || this.userSocketsMap.get(uid)!.size === 0;
+        if (!this.userSocketsMap.has(uid)) {
+          this.userSocketsMap.set(uid, new Set());
         }
-        this.userSocketsMap.get(userId)!.add(socket.id);
+        this.userSocketsMap.get(uid)!.add(socket.id);
+
+        if (wasOffline) {
+          this.broadcastOnlineUsers();
+        }
 
         // Fetch user's status asynchronously
-        userService.getUserStatus(userId)
+        userService.getUserStatus(uid)
           .then((dbUser) => {
             if (dbUser) {
               socket.emit('circle:my_status_init', {
@@ -132,6 +148,9 @@ export class SocketManager {
           })
           .catch(() => {});
       }
+
+      // Send instant active online users list to connecting socket
+      socket.emit('circle:online_users', { onlineUserIds: Array.from(this.userSocketsMap.keys()) });
 
       // 1. Instant Initial Data From Cache (0ms)
       socket.emit('circle:users_updated', { users: userService.getCachedActiveUsersList() });
@@ -353,43 +372,23 @@ export class SocketManager {
         }
       });
 
-      // ── Event: Direct / Profile-wise Private Friend Chat Relay (0ms) ──
-      socket.on('direct:message', (data: { targetUserId: string; message: any }) => {
-        if (data?.targetUserId && data?.message) {
-          this.emitToUser(data.targetUserId, 'direct:message', data);
-        }
-      });
-
-      // ── Event: Direct Message Status Relay (delivered / seen) ────────
-      socket.on('direct:status', (data: { targetUserId: string; messageId?: string; status: 'delivered' | 'seen' }) => {
-        if (data?.targetUserId && data?.status) {
-          this.emitToUser(data.targetUserId, 'direct:status', data);
-        }
-      });
-
-      socket.on('community:chat_message', (data: { roomId: string; message: any }) => {
-        if (data?.roomId) {
-          socket.to(`community_${data.roomId}`).emit('call:chat_message', {
-            roomId: data.roomId,
-            roomName: `community_${data.roomId}`,
-            message: data.message,
-          });
-        }
-      });
-
       // ── Event: 1-on-1 Direct Messaging (0ms Real-Time Relay) ─────
       socket.on('direct:message', (data: { targetUserId: string; message: any }) => {
         if (data?.targetUserId && data?.message) {
-          const targetRoom = `user_${data.targetUserId}`;
-          this.io?.to(targetRoom).emit('direct:message', data);
+          const targetUid = String(data.targetUserId);
+          this.emitToUser(targetUid, 'direct:message', data);
         }
       });
 
       // ── Event: Direct Message Status (Delivered / Seen Receipts) ──
-      socket.on('direct:status', (data: { targetUserId: string; messageId?: string; status: string }) => {
-        if (data?.targetUserId) {
-          const targetRoom = `user_${data.targetUserId}`;
-          this.io?.to(targetRoom).emit('direct:status', data);
+      socket.on('direct:status', (data: { targetUserId: string; messageId?: string; status: 'delivered' | 'seen'; senderId?: string }) => {
+        if (data?.targetUserId && data?.status) {
+          const targetUid = String(data.targetUserId);
+          const payload = {
+            ...data,
+            senderId: data.senderId || (userId ? String(userId) : undefined),
+          };
+          this.emitToUser(targetUid, 'direct:status', payload);
         }
       });
 
@@ -442,26 +441,28 @@ export class SocketManager {
       // ── Event: Disconnect ────────────────────────────────────────
       socket.on('disconnect', () => {
         if (userId) {
-          const affectedRooms = communityRoomStoreService.removeUserFromAllRooms(userId);
+          const uid = String(userId);
+          const affectedRooms = communityRoomStoreService.removeUserFromAllRooms(uid);
           if (affectedRooms.length > 0) {
             this.broadcastCommunityRooms(true).catch(() => {});
           }
 
-          if (this.userSocketsMap.has(userId)) {
-            this.userSocketsMap.get(userId)!.delete(socket.id);
-            if (this.userSocketsMap.get(userId)!.size === 0) {
-              this.userSocketsMap.delete(userId);
+          if (this.userSocketsMap.has(uid)) {
+            this.userSocketsMap.get(uid)!.delete(socket.id);
+            if (this.userSocketsMap.get(uid)!.size === 0) {
+              this.userSocketsMap.delete(uid);
+              this.broadcastOnlineUsers();
 
               // User has closed Chrome or closed their tab
               // Grace period of 3 seconds to differentiate between page refresh and closing browser
               setTimeout(async () => {
-                if (!this.userSocketsMap.has(userId) || this.userSocketsMap.get(userId)!.size === 0) {
-                  console.log(`[CircleSocket] User ${userId} closed Chrome/Tab - marking INACTIVE and removing from active list`);
-                  userService.removeCacheUser(userId);
+                if (!this.userSocketsMap.has(uid) || this.userSocketsMap.get(uid)!.size === 0) {
+                  console.log(`[CircleSocket] User ${uid} closed Chrome/Tab - marking INACTIVE and removing from active list`);
+                  userService.removeCacheUser(uid);
                   try {
-                    await userService.updateActiveStatusViaHttp(userId, { isCallActive: false });
+                    await userService.updateActiveStatusViaHttp(uid, { isCallActive: false });
                   } catch (e) {
-                    console.warn(`[CircleSocket] Error marking user ${userId} inactive on close:`, e);
+                    console.warn(`[CircleSocket] Error marking user ${uid} inactive on close:`, e);
                   }
                   this.broadcastActiveUsersInstant();
                 }
