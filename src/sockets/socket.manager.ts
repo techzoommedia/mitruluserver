@@ -6,10 +6,12 @@ import { userService } from '../services/user.service';
 import { callService } from '../services/call.service';
 import { communityRoomService } from '../services/community-room.service';
 import { communityRoomStoreService } from '../services/room-store.service';
+import { UserModel } from '../models/user.model';
 
 export class SocketManager {
   private io: SocketIOServer | null = null;
   private userSocketsMap = new Map<string, Set<string>>();
+  private lastSeenMap = new Map<string, number>();
   private callTimeoutsMap = new Map<string, NodeJS.Timeout>();
 
   initialize(server: HttpServer): SocketIOServer {
@@ -50,10 +52,17 @@ export class SocketManager {
     return Array.from(this.userSocketsMap.keys());
   }
 
+  getLastSeenMap(): Record<string, number> {
+    return Object.fromEntries(this.lastSeenMap);
+  }
+
   broadcastOnlineUsers(): void {
     if (!this.io) return;
     const onlineUserIds = Array.from(this.userSocketsMap.keys());
-    this.io.emit('circle:online_users', { onlineUserIds });
+    this.io.emit('circle:online_users', {
+      onlineUserIds,
+      lastSeenMap: Object.fromEntries(this.lastSeenMap),
+    });
   }
 
   broadcastActiveUsersInstant(): void {
@@ -129,6 +138,7 @@ export class SocketManager {
           this.userSocketsMap.set(uid, new Set());
         }
         this.userSocketsMap.get(uid)!.add(socket.id);
+        this.lastSeenMap.delete(uid);
 
         if (wasOffline) {
           this.broadcastOnlineUsers();
@@ -150,7 +160,10 @@ export class SocketManager {
       }
 
       // Send instant active online users list to connecting socket
-      socket.emit('circle:online_users', { onlineUserIds: Array.from(this.userSocketsMap.keys()) });
+      socket.emit('circle:online_users', {
+        onlineUserIds: Array.from(this.userSocketsMap.keys()),
+        lastSeenMap: Object.fromEntries(this.lastSeenMap),
+      });
 
       // 1. Instant Initial Data From Cache (0ms)
       socket.emit('circle:users_updated', { users: userService.getCachedActiveUsersList() });
@@ -451,6 +464,9 @@ export class SocketManager {
             this.userSocketsMap.get(uid)!.delete(socket.id);
             if (this.userSocketsMap.get(uid)!.size === 0) {
               this.userSocketsMap.delete(uid);
+              const now = Date.now();
+              this.lastSeenMap.set(uid, now);
+              UserModel.findByIdAndUpdate(uid, { lastSeen: new Date(now) }).exec().catch(() => {});
               this.broadcastOnlineUsers();
 
               // User has closed Chrome or closed their tab

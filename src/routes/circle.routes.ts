@@ -9,6 +9,7 @@ router.get('/api/circle/online-users', (req, res) => {
   res.json({
     success: true,
     onlineUserIds: socketManager.getOnlineUserIds(),
+    lastSeenMap: socketManager.getLastSeenMap(),
     count: socketManager.getOnlineUsersCount(),
   });
 });

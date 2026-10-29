@@ -21,6 +21,7 @@ export interface IUser extends Document {
   callRateCoins?: number;
   coins?: number;
   earnedCoins?: number;
+  lastSeen?: Date;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -47,6 +48,7 @@ export const UserSchema = new Schema<IUser>(
     callRateCoins: { type: Number, default: 500 },
     coins: { type: Number, default: 0 },
     earnedCoins: { type: Number, default: 0 },
+    lastSeen: { type: Date, default: Date.now, index: true },
   },
   { collection: 'users', timestamps: true }
 );
