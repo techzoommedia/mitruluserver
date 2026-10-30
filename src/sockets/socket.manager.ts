@@ -389,7 +389,13 @@ export class SocketManager {
       socket.on('direct:message', (data: { targetUserId: string; message: any }) => {
         if (data?.targetUserId && data?.message) {
           const targetUid = String(data.targetUserId);
+          // Deliver to target user
           this.emitToUser(targetUid, 'direct:message', data);
+          // Also relay to sender's other tabs/devices for multi-tab sync
+          const senderUid = data.message?.senderId ? String(data.message.senderId) : (userId ? String(userId) : null);
+          if (senderUid && senderUid !== targetUid) {
+            socket.to(`user_${senderUid}`).emit('direct:message', data);
+          }
         }
       });
 
