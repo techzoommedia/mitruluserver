@@ -79,10 +79,16 @@ class SocketManager {
             console.error('[broadcastCommunityRooms] Error:', err);
         }
     }
-    emitToUser(userId, event, payload) {
+    emitToUser(userId, event, payload, exceptSocketId) {
         if (!this.io)
             return;
-        this.io.to(`user_${userId}`).emit(event, payload);
+        const room = `user_${userId}`;
+        if (exceptSocketId) {
+            this.io.to(room).except(exceptSocketId).emit(event, payload);
+        }
+        else {
+            this.io.to(room).emit(event, payload);
+        }
     }
     emitToRoom(room, event, payload) {
         if (!this.io)
@@ -401,7 +407,7 @@ class SocketManager {
                         audioDuration: msg.audioDuration,
                         timestamp: msg.timestamp,
                         status: msg.status,
-                    });
+                    }, socket.id);
                     callback?.({ success: true, message: savedMessage });
                 }
                 catch (err) {

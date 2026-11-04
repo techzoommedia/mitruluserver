@@ -24,7 +24,7 @@ class MessageService {
     /**
      * Send and persist a new message with real-time socket transmission and ACK
      */
-    async sendMessage(data) {
+    async sendMessage(data, senderSocketId) {
         const { senderId, targetUserId, text } = data;
         if (!senderId || !targetUserId || !text?.trim()) {
             throw new Error('senderId, targetUserId, and text are required');
@@ -114,9 +114,9 @@ class MessageService {
             socket_manager_1.socketManager.emitToUser(dbTarget.mitraId, 'direct:message', payload);
         }
         // Echo to sender's other sockets (multi-tab / mobile + web synchronization)
-        socket_manager_1.socketManager.emitToUser(canonicalSenderId, 'direct:message', payload);
+        socket_manager_1.socketManager.emitToUser(canonicalSenderId, 'direct:message', payload, senderSocketId);
         if (cleanSenderId !== canonicalSenderId) {
-            socket_manager_1.socketManager.emitToUser(cleanSenderId, 'direct:message', payload);
+            socket_manager_1.socketManager.emitToUser(cleanSenderId, 'direct:message', payload, senderSocketId);
         }
         // If target was online, also deliver status receipt to sender
         if (initialStatus === 'delivered') {

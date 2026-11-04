@@ -43,7 +43,7 @@ export class MessageService {
   /**
    * Send and persist a new message with real-time socket transmission and ACK
    */
-  async sendMessage(data: SendMessageDTO): Promise<any> {
+  async sendMessage(data: SendMessageDTO, senderSocketId?: string): Promise<any> {
     const { senderId, targetUserId, text } = data;
     if (!senderId || !targetUserId || !text?.trim()) {
       throw new Error('senderId, targetUserId, and text are required');
@@ -148,9 +148,9 @@ export class MessageService {
     }
 
     // Echo to sender's other sockets (multi-tab / mobile + web synchronization)
-    socketManager.emitToUser(canonicalSenderId, 'direct:message', payload);
+    socketManager.emitToUser(canonicalSenderId, 'direct:message', payload, senderSocketId);
     if (cleanSenderId !== canonicalSenderId) {
-      socketManager.emitToUser(cleanSenderId, 'direct:message', payload);
+      socketManager.emitToUser(cleanSenderId, 'direct:message', payload, senderSocketId);
     }
 
     // If target was online, also deliver status receipt to sender

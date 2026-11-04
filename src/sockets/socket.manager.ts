@@ -83,9 +83,14 @@ export class SocketManager {
     }
   }
 
-  emitToUser(userId: string, event: string, payload: any): void {
+  emitToUser(userId: string, event: string, payload: any, exceptSocketId?: string): void {
     if (!this.io) return;
-    this.io.to(`user_${userId}`).emit(event, payload);
+    const room = `user_${userId}`;
+    if (exceptSocketId) {
+      this.io.to(room).except(exceptSocketId).emit(event, payload);
+    } else {
+      this.io.to(room).emit(event, payload);
+    }
   }
 
   emitToRoom(room: string, event: string, payload: any): void {
@@ -436,7 +441,7 @@ export class SocketManager {
             audioDuration: msg.audioDuration,
             timestamp: msg.timestamp,
             status: msg.status,
-          });
+          }, socket.id);
 
           callback?.({ success: true, message: savedMessage });
         } catch (err: any) {
