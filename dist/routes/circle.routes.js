@@ -2,8 +2,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const circle_controller_1 = require("../controllers/circle.controller");
+const socket_manager_1 = require("../sockets/socket.manager");
 const router = (0, express_1.Router)();
 // Public Circle routes
+router.get('/api/circle/online-users', (req, res) => {
+    res.json({
+        success: true,
+        onlineUserIds: socket_manager_1.socketManager.getOnlineUserIds(),
+        lastSeenMap: socket_manager_1.socketManager.getLastSeenMap(),
+        count: socket_manager_1.socketManager.getOnlineUsersCount(),
+    });
+});
 router.get('/api/circle/users', (req, res) => circle_controller_1.circleController.getActiveUsers(req, res));
 router.get('/api/circle/community/rooms', (req, res) => circle_controller_1.circleController.getCommunityRooms(req, res));
 router.post('/api/circle/community/rooms', (req, res) => circle_controller_1.circleController.joinCommunityRoom(req, res));

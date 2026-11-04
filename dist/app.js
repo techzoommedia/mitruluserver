@@ -21,7 +21,7 @@ function createApp() {
         },
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'x-mitrulu-client', 'x-mitrulu-encrypt', 'Accept'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'x-mitrulu-client', 'x-mitrulu-encrypt', 'x-mitrulu-userid', 'Accept'],
     }));
     app.use(express_1.default.json());
     // Mount API & health routes

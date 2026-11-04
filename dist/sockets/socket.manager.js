@@ -11,9 +11,12 @@ const user_service_1 = require("../services/user.service");
 const call_service_1 = require("../services/call.service");
 const community_room_service_1 = require("../services/community-room.service");
 const room_store_service_1 = require("../services/room-store.service");
+const user_model_1 = require("../models/user.model");
+const message_service_1 = require("../services/message.service");
 class SocketManager {
     io = null;
     userSocketsMap = new Map();
+    lastSeenMap = new Map();
     callTimeoutsMap = new Map();
     initialize(server) {
         this.io = new socket_io_1.Server(server, {
@@ -42,6 +45,21 @@ class SocketManager {
     }
     getOnlineUsersCount() {
         return this.userSocketsMap.size;
+    }
+    getOnlineUserIds() {
+        return Array.from(this.userSocketsMap.keys());
+    }
+    getLastSeenMap() {
+        return Object.fromEntries(this.lastSeenMap);
+    }
+    broadcastOnlineUsers() {
+        if (!this.io)
+            return;
+        const onlineUserIds = Array.from(this.userSocketsMap.keys());
+        this.io.emit('circle:online_users', {
+            onlineUserIds,
+            lastSeenMap: Object.fromEntries(this.lastSeenMap),
+        });
     }
     broadcastActiveUsersInstant() {
         if (!this.io)
@@ -104,15 +122,38 @@ class SocketManager {
         this.io.on('connection', (socket) => {
             const userId = socket.data.userId;
             if (userId) {
+                const uid = String(userId);
                 // Join user's personal room for direct 1-on-1 signaling
-                const userRoom = `user_${userId}`;
+                const userRoom = `user_${uid}`;
                 socket.join(userRoom);
-                if (!this.userSocketsMap.has(userId)) {
-                    this.userSocketsMap.set(userId, new Set());
+                // Also join user's handle and mitraId rooms so messages sent to handle reach socket
+                user_model_1.UserModel.findById(uid)
+                    .select('_id handle mitraId')
+                    .lean()
+                    .then((u) => {
+                    if (u) {
+                        if (u.handle)
+                            socket.join(`user_${String(u.handle).toLowerCase()}`);
+                        if (u.mitraId)
+                            socket.join(`user_${String(u.mitraId).toLowerCase()}`);
+                    }
+                })
+                    .catch(() => { });
+                const wasOffline = !this.userSocketsMap.has(uid) || this.userSocketsMap.get(uid).size === 0;
+                if (!this.userSocketsMap.has(uid)) {
+                    this.userSocketsMap.set(uid, new Set());
                 }
-                this.userSocketsMap.get(userId).add(socket.id);
+                this.userSocketsMap.get(uid).add(socket.id);
+                this.lastSeenMap.delete(uid);
+                if (wasOffline) {
+                    this.broadcastOnlineUsers();
+                }
+                // Automatically mark all pending sent messages as delivered
+                message_service_1.messageService.markDeliveredForUser(uid).catch((err) => {
+                    console.warn('[CircleSocket] Error marking delivered for user:', err);
+                });
                 // Fetch user's status asynchronously
-                user_service_1.userService.getUserStatus(userId)
+                user_service_1.userService.getUserStatus(uid)
                     .then((dbUser) => {
                     if (dbUser) {
                         socket.emit('circle:my_status_init', {
@@ -125,6 +166,11 @@ class SocketManager {
                 })
                     .catch(() => { });
             }
+            // Send instant active online users list to connecting socket
+            socket.emit('circle:online_users', {
+                onlineUserIds: Array.from(this.userSocketsMap.keys()),
+                lastSeenMap: Object.fromEntries(this.lastSeenMap),
+            });
             // 1. Instant Initial Data From Cache (0ms)
             socket.emit('circle:users_updated', { users: user_service_1.userService.getCachedActiveUsersList() });
             socket.emit('circle:rooms_updated', { rooms: community_room_service_1.communityRoomService.getCachedRooms() });
@@ -325,12 +371,68 @@ class SocketManager {
                     this.emitToUser(data.message.targetUserId, 'call:chat_message', data);
                 }
             });
-            socket.on('community:chat_message', (data) => {
-                if (data?.roomId) {
-                    socket.to(`community_${data.roomId}`).emit('call:chat_message', {
-                        roomId: data.roomId,
-                        roomName: `community_${data.roomId}`,
-                        message: data.message,
+            // ── Event: 1-on-1 Direct Messaging (Full Node.js Backend Persistence + 0ms Real-Time Delivery) ─────
+            socket.on('direct:message', async (data, callback) => {
+                try {
+                    if (!data?.targetUserId || !data?.message) {
+                        return callback?.({ success: false, error: 'Invalid message payload' });
+                    }
+                    const msg = data.message;
+                    const senderId = socket.data.userId || msg.senderId;
+                    if (!senderId) {
+                        return callback?.({ success: false, error: 'Sender identifier required' });
+                    }
+                    // Complete backend persistence & real-time dispatch via messageService
+                    const savedMessage = await message_service_1.messageService.sendMessage({
+                        id: msg.id,
+                        senderId: String(senderId),
+                        senderName: msg.senderName,
+                        senderAvatar: msg.senderAvatar,
+                        senderHandle: msg.senderHandle,
+                        senderTeluguName: msg.senderTeluguName,
+                        targetUserId: String(data.targetUserId),
+                        targetUserName: msg.targetUserName,
+                        targetUserAvatar: msg.targetUserAvatar,
+                        targetUserHandle: msg.targetUserHandle,
+                        targetUserTeluguName: msg.targetUserTeluguName,
+                        text: msg.text,
+                        mediaUrl: msg.mediaUrl,
+                        mediaType: msg.mediaType,
+                        audioDuration: msg.audioDuration,
+                        timestamp: msg.timestamp,
+                        status: msg.status,
+                    });
+                    callback?.({ success: true, message: savedMessage });
+                }
+                catch (err) {
+                    console.error('[Socket direct:message error]:', err);
+                    callback?.({ success: false, error: err.message || 'Failed to send message' });
+                }
+            });
+            // ── Event: Direct Message Status (Delivered / Seen Receipts) ──
+            socket.on('direct:status', async (data, callback) => {
+                try {
+                    if (!data?.targetUserId || !data?.status) {
+                        return callback?.({ success: false, error: 'Invalid status payload' });
+                    }
+                    const myId = socket.data.userId || data.senderId;
+                    if (myId) {
+                        await message_service_1.messageService.updateStatus(String(myId), String(data.targetUserId), data.status, data.messageId);
+                    }
+                    callback?.({ success: true });
+                }
+                catch (err) {
+                    console.error('[Socket direct:status error]:', err);
+                    callback?.({ success: false, error: err.message || 'Failed to update status' });
+                }
+            });
+            // ── Event: Real-time Typing Indicator ────────────────────────
+            socket.on('direct:typing', (data) => {
+                if (data?.targetUserId) {
+                    const senderId = socket.data.userId;
+                    this.emitToUser(String(data.targetUserId), 'direct:typing', {
+                        senderId,
+                        isTyping: Boolean(data.isTyping),
                     });
                 }
             });
@@ -377,25 +479,30 @@ class SocketManager {
             // ── Event: Disconnect ────────────────────────────────────────
             socket.on('disconnect', () => {
                 if (userId) {
-                    const affectedRooms = room_store_service_1.communityRoomStoreService.removeUserFromAllRooms(userId);
+                    const uid = String(userId);
+                    const affectedRooms = room_store_service_1.communityRoomStoreService.removeUserFromAllRooms(uid);
                     if (affectedRooms.length > 0) {
                         this.broadcastCommunityRooms(true).catch(() => { });
                     }
-                    if (this.userSocketsMap.has(userId)) {
-                        this.userSocketsMap.get(userId).delete(socket.id);
-                        if (this.userSocketsMap.get(userId).size === 0) {
-                            this.userSocketsMap.delete(userId);
+                    if (this.userSocketsMap.has(uid)) {
+                        this.userSocketsMap.get(uid).delete(socket.id);
+                        if (this.userSocketsMap.get(uid).size === 0) {
+                            this.userSocketsMap.delete(uid);
+                            const now = Date.now();
+                            this.lastSeenMap.set(uid, now);
+                            user_model_1.UserModel.findByIdAndUpdate(uid, { lastSeen: new Date(now) }).exec().catch(() => { });
+                            this.broadcastOnlineUsers();
                             // User has closed Chrome or closed their tab
                             // Grace period of 3 seconds to differentiate between page refresh and closing browser
                             setTimeout(async () => {
-                                if (!this.userSocketsMap.has(userId) || this.userSocketsMap.get(userId).size === 0) {
-                                    console.log(`[CircleSocket] User ${userId} closed Chrome/Tab - marking INACTIVE and removing from active list`);
-                                    user_service_1.userService.removeCacheUser(userId);
+                                if (!this.userSocketsMap.has(uid) || this.userSocketsMap.get(uid).size === 0) {
+                                    console.log(`[CircleSocket] User ${uid} closed Chrome/Tab - marking INACTIVE and removing from active list`);
+                                    user_service_1.userService.removeCacheUser(uid);
                                     try {
-                                        await user_service_1.userService.updateActiveStatusViaHttp(userId, { isCallActive: false });
+                                        await user_service_1.userService.updateActiveStatusViaHttp(uid, { isCallActive: false });
                                     }
                                     catch (e) {
-                                        console.warn(`[CircleSocket] Error marking user ${userId} inactive on close:`, e);
+                                        console.warn(`[CircleSocket] Error marking user ${uid} inactive on close:`, e);
                                     }
                                     this.broadcastActiveUsersInstant();
                                 }

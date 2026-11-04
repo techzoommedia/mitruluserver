@@ -56,5 +56,6 @@ exports.UserSchema = new mongoose_1.Schema({
     callRateCoins: { type: Number, default: 500 },
     coins: { type: Number, default: 0 },
     earnedCoins: { type: Number, default: 0 },
+    lastSeen: { type: Date, default: Date.now, index: true },
 }, { collection: 'users', timestamps: true });
 exports.UserModel = mongoose_1.default.models.User || mongoose_1.default.model('User', exports.UserSchema);

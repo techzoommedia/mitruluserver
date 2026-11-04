@@ -7,6 +7,7 @@ import { callService } from '../services/call.service';
 import { communityRoomService } from '../services/community-room.service';
 import { communityRoomStoreService } from '../services/room-store.service';
 import { UserModel } from '../models/user.model';
+import { messageService } from '../services/message.service';
 
 export class SocketManager {
   private io: SocketIOServer | null = null;
@@ -133,6 +134,18 @@ export class SocketManager {
         const userRoom = `user_${uid}`;
         socket.join(userRoom);
 
+        // Also join user's handle and mitraId rooms so messages sent to handle reach socket
+        UserModel.findById(uid)
+          .select('_id handle mitraId')
+          .lean()
+          .then((u: any) => {
+            if (u) {
+              if (u.handle) socket.join(`user_${String(u.handle).toLowerCase()}`);
+              if (u.mitraId) socket.join(`user_${String(u.mitraId).toLowerCase()}`);
+            }
+          })
+          .catch(() => {});
+
         const wasOffline = !this.userSocketsMap.has(uid) || this.userSocketsMap.get(uid)!.size === 0;
         if (!this.userSocketsMap.has(uid)) {
           this.userSocketsMap.set(uid, new Set());
@@ -143,6 +156,11 @@ export class SocketManager {
         if (wasOffline) {
           this.broadcastOnlineUsers();
         }
+
+        // Automatically mark all pending sent messages as delivered
+        messageService.markDeliveredForUser(uid).catch((err) => {
+          console.warn('[CircleSocket] Error marking delivered for user:', err);
+        });
 
         // Fetch user's status asynchronously
         userService.getUserStatus(uid)
@@ -385,29 +403,75 @@ export class SocketManager {
         }
       });
 
-      // ── Event: 1-on-1 Direct Messaging (0ms Real-Time Relay) ─────
-      socket.on('direct:message', (data: { targetUserId: string; message: any }) => {
-        if (data?.targetUserId && data?.message) {
-          const targetUid = String(data.targetUserId);
-          // Deliver to target user
-          this.emitToUser(targetUid, 'direct:message', data);
-          // Also relay to sender's other tabs/devices for multi-tab sync
-          const senderUid = data.message?.senderId ? String(data.message.senderId) : (userId ? String(userId) : null);
-          if (senderUid && senderUid !== targetUid) {
-            socket.to(`user_${senderUid}`).emit('direct:message', data);
+      // ── Event: 1-on-1 Direct Messaging (Full Node.js Backend Persistence + 0ms Real-Time Delivery) ─────
+      socket.on('direct:message', async (data: { targetUserId: string; message: any }, callback?: Function) => {
+        try {
+          if (!data?.targetUserId || !data?.message) {
+            return callback?.({ success: false, error: 'Invalid message payload' });
           }
+
+          const msg = data.message;
+          const senderId = socket.data.userId || msg.senderId;
+
+          if (!senderId) {
+            return callback?.({ success: false, error: 'Sender identifier required' });
+          }
+
+          // Complete backend persistence & real-time dispatch via messageService
+          const savedMessage = await messageService.sendMessage({
+            id: msg.id,
+            senderId: String(senderId),
+            senderName: msg.senderName,
+            senderAvatar: msg.senderAvatar,
+            senderHandle: msg.senderHandle,
+            senderTeluguName: msg.senderTeluguName,
+            targetUserId: String(data.targetUserId),
+            targetUserName: msg.targetUserName,
+            targetUserAvatar: msg.targetUserAvatar,
+            targetUserHandle: msg.targetUserHandle,
+            targetUserTeluguName: msg.targetUserTeluguName,
+            text: msg.text,
+            mediaUrl: msg.mediaUrl,
+            mediaType: msg.mediaType,
+            audioDuration: msg.audioDuration,
+            timestamp: msg.timestamp,
+            status: msg.status,
+          });
+
+          callback?.({ success: true, message: savedMessage });
+        } catch (err: any) {
+          console.error('[Socket direct:message error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to send message' });
         }
       });
 
       // ── Event: Direct Message Status (Delivered / Seen Receipts) ──
-      socket.on('direct:status', (data: { targetUserId: string; messageId?: string; status: 'delivered' | 'seen'; senderId?: string }) => {
-        if (data?.targetUserId && data?.status) {
-          const targetUid = String(data.targetUserId);
-          const payload = {
-            ...data,
-            senderId: data.senderId || (userId ? String(userId) : undefined),
-          };
-          this.emitToUser(targetUid, 'direct:status', payload);
+      socket.on('direct:status', async (data: { targetUserId: string; messageId?: string; status: 'delivered' | 'seen'; senderId?: string }, callback?: Function) => {
+        try {
+          if (!data?.targetUserId || !data?.status) {
+            return callback?.({ success: false, error: 'Invalid status payload' });
+          }
+
+          const myId = socket.data.userId || data.senderId;
+          if (myId) {
+            await messageService.updateStatus(String(myId), String(data.targetUserId), data.status, data.messageId);
+          }
+
+          callback?.({ success: true });
+        } catch (err: any) {
+          console.error('[Socket direct:status error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to update status' });
+        }
+      });
+
+      // ── Event: Real-time Typing Indicator ────────────────────────
+      socket.on('direct:typing', (data: { targetUserId: string; isTyping: boolean }) => {
+        if (data?.targetUserId) {
+          const senderId = socket.data.userId;
+          this.emitToUser(String(data.targetUserId), 'direct:typing', {
+            senderId,
+            isTyping: Boolean(data.isTyping),
+          });
         }
       });
 
