@@ -8,6 +8,7 @@ import { communityRoomService } from '../services/community-room.service';
 import { communityRoomStoreService } from '../services/room-store.service';
 import { UserModel } from '../models/user.model';
 import { messageService } from '../services/message.service';
+import { groupMessageService } from '../services/group-message.service';
 
 export class SocketManager {
   private io: SocketIOServer | null = null;
@@ -181,6 +182,9 @@ export class SocketManager {
           })
           .catch(() => {});
       }
+
+      // Automatically join public Telugu community group room
+      socket.join('group_telugu');
 
       // Send instant active online users list to connecting socket
       socket.emit('circle:online_users', {
@@ -477,6 +481,51 @@ export class SocketManager {
             senderId,
             isTyping: Boolean(data.isTyping),
           });
+        }
+      });
+
+      // ── Event: Group Messaging (Public Community Groups e.g. Telugu) ──
+      socket.on('group:join', (data: { groupId?: string }) => {
+        const gid = data?.groupId || 'telugu';
+        socket.join(`group_${gid}`);
+      });
+
+      socket.on('group:leave', (data: { groupId?: string }) => {
+        const gid = data?.groupId || 'telugu';
+        socket.leave(`group_${gid}`);
+      });
+
+      socket.on('group:message', async (data: { groupId?: string; message: any }, callback?: Function) => {
+        try {
+          const groupId = (data?.groupId || 'telugu').toLowerCase();
+          const msg = data?.message;
+          if (!msg || (!msg.text && !msg.mediaUrl)) {
+            return callback?.({ success: false, error: 'Invalid group message payload' });
+          }
+
+          const senderId = socket.data.userId || msg.senderId;
+          if (!senderId) {
+            return callback?.({ success: false, error: 'Sender identifier required' });
+          }
+
+          const savedMessage = await groupMessageService.sendGroupMessage({
+            id: msg.id,
+            groupId,
+            senderId: String(senderId),
+            senderName: msg.senderName || 'Mitrulu Member',
+            senderAvatar: msg.senderAvatar,
+            senderHandle: msg.senderHandle,
+            senderTeluguName: msg.senderTeluguName,
+            text: msg.text || '',
+            mediaUrl: msg.mediaUrl,
+            mediaType: msg.mediaType,
+            timestamp: msg.timestamp,
+          }, socket.id);
+
+          callback?.({ success: true, message: savedMessage });
+        } catch (err: any) {
+          console.error('[Socket group:message error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to send group message' });
         }
       });
 

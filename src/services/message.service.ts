@@ -184,6 +184,14 @@ export class MessageService {
     ]);
 
     const canonicalMyId = dbSender ? String(dbSender._id) : cleanMyId;
+    const myCanonicalIds = new Set<string>();
+    myCanonicalIds.add(cleanMyId.toLowerCase());
+    myCanonicalIds.add(canonicalMyId.toLowerCase());
+    if (dbSender) {
+      if (dbSender.mitraId) myCanonicalIds.add(dbSender.mitraId.toLowerCase());
+      if (dbSender.handle) myCanonicalIds.add(dbSender.handle.toLowerCase());
+    }
+
     const partnerCanonicalIds = new Set<string>();
     partnerCanonicalIds.add(cleanPartnerId.toLowerCase());
     if (dbPartner) {
@@ -193,17 +201,20 @@ export class MessageService {
     }
 
     // Build all candidate conversation keys
-    const conversationKeys = Array.from(partnerCanonicalIds).map((pid) =>
-      buildConversationKey(canonicalMyId, pid)
-    );
+    const conversationKeys: string[] = [];
+    for (const m of myCanonicalIds) {
+      for (const p of partnerCanonicalIds) {
+        conversationKeys.push(buildConversationKey(m, p));
+      }
+    }
 
     const query: any = {
       $or: [
         { conversationKey: { $in: conversationKeys } },
         {
           $and: [
-            { senderId: { $in: [canonicalMyId, ...Array.from(partnerCanonicalIds)] } },
-            { targetUserId: { $in: [canonicalMyId, ...Array.from(partnerCanonicalIds)] } },
+            { senderId: { $in: [...Array.from(myCanonicalIds), ...Array.from(partnerCanonicalIds)] } },
+            { targetUserId: { $in: [...Array.from(myCanonicalIds), ...Array.from(partnerCanonicalIds)] } },
           ],
         },
       ],
@@ -251,14 +262,24 @@ export class MessageService {
     const dbMe = await this.resolveUser(cleanMyId);
     const canonicalMyId = dbMe ? String(dbMe._id) : cleanMyId;
 
-    const recentMessages = await messageRepository.aggregateConversations(canonicalMyId);
+    const myCanonicalIds = new Set<string>();
+    myCanonicalIds.add(canonicalMyId);
+    myCanonicalIds.add(cleanMyId);
+    if (dbMe) {
+      if (dbMe.handle) myCanonicalIds.add(dbMe.handle);
+      if (dbMe.mitraId) myCanonicalIds.add(dbMe.mitraId);
+    }
+    const myIdsList = Array.from(myCanonicalIds);
+
+    const recentMessages = await messageRepository.aggregateConversations(myIdsList);
 
     const partnerIdMap = new Map<string, any>();
-    const partnerIdsToFetch: string[] = [];
+    const partnerObjectIds: string[] = [];
+    const partnerHandles: string[] = [];
 
     for (const item of recentMessages) {
       const msg = item.lastMessage;
-      const isMeSender = String(msg.senderId) === canonicalMyId;
+      const isMeSender = myCanonicalIds.has(String(msg.senderId));
       const partnerId = isMeSender ? String(msg.targetUserId) : String(msg.senderId);
       const partnerName = isMeSender ? msg.targetUserName : msg.senderName;
       const partnerAvatar = isMeSender ? msg.targetUserAvatar : msg.senderAvatar;
@@ -281,23 +302,34 @@ export class MessageService {
       });
 
       if (partnerId.match(/^[0-9a-fA-F]{24}$/)) {
-        partnerIdsToFetch.push(partnerId);
+        partnerObjectIds.push(partnerId);
+      } else if (partnerId) {
+        partnerHandles.push(partnerId);
       }
     }
 
-    if (partnerIdsToFetch.length > 0) {
-      const dbUsers: any[] = await UserModel.find({ _id: { $in: partnerIdsToFetch } })
+    if (partnerObjectIds.length > 0 || partnerHandles.length > 0) {
+      const orConditions: any[] = [];
+      if (partnerObjectIds.length > 0) orConditions.push({ _id: { $in: partnerObjectIds } });
+      if (partnerHandles.length > 0) {
+        orConditions.push({ handle: { $in: partnerHandles } });
+        orConditions.push({ mitraId: { $in: partnerHandles } });
+      }
+
+      const dbUsers: any[] = await UserModel.find({ $or: orConditions })
         .select('_id name teluguName handle mitraId avatar isVerified isOnline location lastSeen')
         .lean();
 
       const userById = new Map<string, any>();
       for (const u of dbUsers) {
         userById.set(String(u._id), u);
+        if (u.handle) userById.set(String(u.handle).toLowerCase(), u);
+        if (u.mitraId) userById.set(String(u.mitraId).toLowerCase(), u);
       }
 
       for (const [, val] of partnerIdMap) {
-        if (userById.has(val.partnerId)) {
-          const dbU = userById.get(val.partnerId);
+        const dbU = userById.get(val.partnerId) || userById.get(val.partnerId.toLowerCase());
+        if (dbU) {
           val.fallbackUser = {
             id: String(dbU._id),
             _id: String(dbU._id),

@@ -29,11 +29,12 @@ export class MessageRepository {
     return res.modifiedCount;
   }
 
-  async aggregateConversations(myId: string): Promise<any[]> {
+  async aggregateConversations(myIds: string[]): Promise<any[]> {
+    const ids = Array.isArray(myIds) ? myIds : [myIds];
     return DirectMessageModel.aggregate([
       {
         $match: {
-          $or: [{ senderId: myId }, { targetUserId: myId }],
+          $or: [{ senderId: { $in: ids } }, { targetUserId: { $in: ids } }],
         },
       },
       {
@@ -41,38 +42,25 @@ export class MessageRepository {
       },
       {
         $addFields: {
-          _convKey: {
-            $cond: {
-              if: { $and: [{ $ifNull: ['$conversationKey', false] }, { $ne: ['$conversationKey', ''] }] },
-              then: '$conversationKey',
-              else: {
-                $let: {
-                  vars: {
-                    sorted: {
-                      $cond: {
-                        if: { $lte: ['$senderId', '$targetUserId'] },
-                        then: { $concat: ['$senderId', ':', '$targetUserId'] },
-                        else: { $concat: ['$targetUserId', ':', '$senderId'] },
-                      },
-                    },
-                  },
-                  in: '$$sorted',
-                },
-              },
-            },
+          _partnerId: {
+            $cond: [
+              { $in: ['$senderId', ids] },
+              '$targetUserId',
+              '$senderId',
+            ],
           },
         },
       },
       {
         $group: {
-          _id: '$_convKey',
+          _id: '$_partnerId',
           lastMessage: { $first: '$$ROOT' },
           unreadCount: {
             $sum: {
               $cond: [
                 {
                   $and: [
-                    { $eq: ['$targetUserId', myId] },
+                    { $in: ['$targetUserId', ids] },
                     { $ne: ['$status', 'seen'] },
                   ],
                 },
