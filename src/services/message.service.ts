@@ -1,6 +1,8 @@
+import mongoose from 'mongoose';
 import { messageRepository } from '../repositories/message.repository';
 import { buildConversationKey, IDirectMessage, MessageStatus } from '../models/message.model';
 import { UserModel, IUser } from '../models/user.model';
+import NotificationModel from '../models/notification.model';
 import { socketManager } from '../sockets/socket.manager';
 
 export interface SendMessageDTO {
@@ -163,6 +165,59 @@ export class MessageService {
       });
     }
 
+    // 3. Real-time In-App Notification and Badge Sync (0ms latency)
+    if (canonicalTargetId && mongoose.Types.ObjectId.isValid(canonicalTargetId)) {
+      const recipientOid = new mongoose.Types.ObjectId(canonicalTargetId);
+      const actorOid = mongoose.Types.ObjectId.isValid(canonicalSenderId)
+        ? new mongoose.Types.ObjectId(canonicalSenderId)
+        : undefined;
+
+      NotificationModel.create({
+        recipient: recipientOid,
+        actor: actorOid,
+        type: 'message',
+        title: senderName || 'కొత్త సందేశం (New Message)',
+        teluguTitle: senderTeluguName ? `${senderTeluguName} నుండి సందేశం` : `${senderName} నుండి సందేశం`,
+        body: text.length > 80 ? `${text.slice(0, 80)}...` : text,
+        teluguBody: text.length > 80 ? `${text.slice(0, 80)}...` : text,
+        data: {
+          messageId,
+          senderId: canonicalSenderId,
+          senderHandle,
+          conversationKey: convKey,
+        },
+        link: `/messages?user=${encodeURIComponent(senderHandle || canonicalSenderId)}`,
+        isRead: false,
+      })
+        .then((notif) => {
+          const notifPayload = {
+            id: notif._id.toString(),
+            type: 'message',
+            title: notif.title,
+            teluguTitle: notif.teluguTitle,
+            body: notif.body,
+            teluguBody: notif.teluguBody,
+            actor: {
+              id: canonicalSenderId,
+              name: senderName,
+              teluguName: senderTeluguName,
+              handle: senderHandle,
+              avatar: senderAvatar,
+            },
+            link: notif.link,
+            createdAt: notif.createdAt,
+            isRead: false,
+          };
+          socketManager.emitToUser(canonicalTargetId, 'notification:new', { notification: notifPayload });
+          if (cleanTargetId !== canonicalTargetId) {
+            socketManager.emitToUser(cleanTargetId, 'notification:new', { notification: notifPayload });
+          }
+        })
+        .catch((err) => {
+          console.warn('[MessageService] Notification creation warning:', err);
+        });
+    }
+
     return publicMessage;
   }
 
@@ -265,9 +320,19 @@ export class MessageService {
     const myCanonicalIds = new Set<string>();
     myCanonicalIds.add(canonicalMyId);
     myCanonicalIds.add(cleanMyId);
+    myCanonicalIds.add(canonicalMyId.toLowerCase());
+    myCanonicalIds.add(cleanMyId.toLowerCase());
     if (dbMe) {
-      if (dbMe.handle) myCanonicalIds.add(dbMe.handle);
-      if (dbMe.mitraId) myCanonicalIds.add(dbMe.mitraId);
+      if (dbMe.handle) {
+        myCanonicalIds.add(dbMe.handle);
+        myCanonicalIds.add(dbMe.handle.toLowerCase());
+        myCanonicalIds.add(dbMe.handle.toLowerCase().replace(/^@/, ''));
+      }
+      if (dbMe.mitraId) {
+        myCanonicalIds.add(dbMe.mitraId);
+        myCanonicalIds.add(dbMe.mitraId.toLowerCase());
+        myCanonicalIds.add(dbMe.mitraId.toLowerCase().replace(/^@/, ''));
+      }
     }
     const myIdsList = Array.from(myCanonicalIds);
 
@@ -281,6 +346,12 @@ export class MessageService {
       const msg = item.lastMessage;
       const isMeSender = myCanonicalIds.has(String(msg.senderId));
       const partnerId = isMeSender ? String(msg.targetUserId) : String(msg.senderId);
+
+      // STRICT GUARD: Never return self as chat partner!
+      if (!partnerId || myCanonicalIds.has(partnerId) || myCanonicalIds.has(partnerId.toLowerCase())) {
+        continue;
+      }
+
       const partnerName = isMeSender ? msg.targetUserName : msg.senderName;
       const partnerAvatar = isMeSender ? msg.targetUserAvatar : msg.senderAvatar;
       const partnerHandle = isMeSender ? msg.targetUserHandle : msg.senderHandle;
@@ -347,7 +418,13 @@ export class MessageService {
       }
     }
 
-    return Array.from(partnerIdMap.values()).map((v) => ({
+    return Array.from(partnerIdMap.values())
+      .filter((v) => {
+        const pid = String(v.fallbackUser.id || v.fallbackUser._id || '').toLowerCase();
+        const ph = String(v.fallbackUser.handle || v.fallbackUser.mitraId || '').toLowerCase().replace(/^@/, '');
+        return !myCanonicalIds.has(pid) && (!ph || !myCanonicalIds.has(ph));
+      })
+      .map((v) => ({
       targetUser: v.fallbackUser,
       lastMessage: {
         id: v.lastMessage.id,
