@@ -4,8 +4,11 @@ import { optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
 
-router.post('/api/reports', optionalAuth, (req, res) => reportController.createReport(req, res));
-router.get('/api/reports', optionalAuth, (req, res) => reportController.getReports(req, res));
+router.post(['/api/reports', '/api/reports/', '/reports', '/reports/'], optionalAuth, (req, res) =>
+  reportController.createReport(req, res)
+);
+router.get(['/api/reports', '/api/reports/', '/reports', '/reports/'], optionalAuth, (req, res) =>
+  reportController.getReports(req, res)
+);
 
 export default router;
-

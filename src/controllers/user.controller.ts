@@ -357,14 +357,15 @@ export class UserController {
         return;
       }
 
-      const { targetUserId, block = true } = req.body;
+      const { targetUserId } = req.body;
+      const isBlock = req.body.block !== undefined ? Boolean(req.body.block) : req.body.action !== 'unblock';
       if (!targetUserId) {
         res.status(400).json({ error: 'Target user ID is required' });
         return;
       }
 
       const targetObjId = new mongoose.Types.ObjectId(targetUserId);
-      if (block) {
+      if (isBlock) {
         await UserModel.findByIdAndUpdate(currentUserId, {
           $addToSet: { blockedUsers: targetObjId },
         });
@@ -374,7 +375,7 @@ export class UserController {
         });
       }
 
-      res.json({ success: true, isBlocked: block });
+      res.json({ success: true, isBlocked: isBlock });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
