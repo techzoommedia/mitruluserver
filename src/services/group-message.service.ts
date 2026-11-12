@@ -125,6 +125,29 @@ export class GroupMessageService {
   }
 
   /**
+   * Ensure only the original sender can modify/delete their own group message
+   */
+  private async assertGroupMessageSender(
+    myId: string,
+    msg: any,
+    action: string
+  ): Promise<{ dbMe: any; myIdsList: string[] }> {
+    const cleanMyId = String(myId).trim();
+    const dbMe = await messageService.resolveUser(cleanMyId);
+    const myIdsList = messageService.getCanonicalIdsForUser(cleanMyId, dbMe);
+    const myIdsLower = new Set(myIdsList.map((s) => s.toLowerCase()));
+
+    const msgSenderId = String(msg.senderId || '').toLowerCase();
+    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
+    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
+    if (!isSender) {
+      throw new Error(`Forbidden: Only the sender can ${action} this message`);
+    }
+
+    return { dbMe, myIdsList };
+  }
+
+  /**
    * Edit a sent group message (sender only)
    */
   async editGroupMessage(
@@ -142,17 +165,7 @@ export class GroupMessageService {
       throw new Error('Message not found');
     }
 
-    const dbMe = await messageService.resolveUser(String(myId).trim());
-    const myIdsLower = new Set(
-      messageService.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase())
-    );
-
-    const msgSenderId = String(msg.senderId || '').toLowerCase();
-    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
-    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
-    if (!isSender) {
-      throw new Error('Forbidden: Only the sender can edit this message');
-    }
+    await this.assertGroupMessageSender(myId, msg, 'edit');
 
     const editedAt = Date.now();
     const updated = await groupMessageRepository.updateMessageText(messageId, trimmed, editedAt);
@@ -187,17 +200,7 @@ export class GroupMessageService {
       return { success: true, messageId, deletedCount: 0 };
     }
 
-    const dbMe = await messageService.resolveUser(String(myId).trim());
-    const myIdsLower = new Set(
-      messageService.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase())
-    );
-
-    const msgSenderId = String(msg.senderId || '').toLowerCase();
-    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
-    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
-    if (!isSender) {
-      throw new Error('Forbidden: Only the sender can unsend this message');
-    }
+    await this.assertGroupMessageSender(myId, msg, 'unsend');
 
     const deletedCount = await groupMessageRepository.deleteMessageById(messageId);
     const gid = (msg.groupId || 'telugu').toLowerCase();
@@ -216,7 +219,7 @@ export class GroupMessageService {
   }
 
   /**
-   * Delete a group message only from the current user's side
+   * Delete a group message only from the sender's side (sender only)
    */
   async deleteGroupMessageForMe(
     myId: string,
@@ -228,8 +231,7 @@ export class GroupMessageService {
     }
 
     const cleanMyId = String(myId).trim();
-    const dbMe = await messageService.resolveUser(cleanMyId);
-    const myIdsList = messageService.getCanonicalIdsForUser(cleanMyId, dbMe);
+    const { dbMe, myIdsList } = await this.assertGroupMessageSender(cleanMyId, msg, 'delete');
 
     await groupMessageRepository.markDeletedForUser(messageId, myIdsList);
 
