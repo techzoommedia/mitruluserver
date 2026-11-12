@@ -1,4 +1,9 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+
+dotenv.config();
+// Fallback for missing env vars (e.g. FIREBASE_* keys shared with mitruluweb locally)
+dotenv.config({ path: path.resolve(__dirname, '../../../mitruluweb/.env') });
 
 export const PORT = Number(process.env.PORT) || 5001;
 

@@ -3,6 +3,12 @@ import mongoose from 'mongoose';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import NotificationModel from '../models/notification.model';
 import UserModel from '../models/user.model';
+import { socketManager } from '../sockets/socket.manager';
+import {
+  markPushDispatchedForMessage,
+  resolveRecipientUser,
+  sendPushToUser,
+} from '../services/push.service';
 
 export class NotificationController {
   async getNotifications(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -109,21 +115,119 @@ export class NotificationController {
 
   async dispatchDmPush(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
-      const { targetUserId, title, body } = req.body;
-      // Socket manager already relays in-app, this records background notification
-      if (targetUserId && mongoose.Types.ObjectId.isValid(targetUserId)) {
-        await NotificationModel.create({
-          recipient: new mongoose.Types.ObjectId(targetUserId),
-          actor: req.userId && mongoose.Types.ObjectId.isValid(req.userId) ? new mongoose.Types.ObjectId(req.userId) : undefined,
+      const { targetUserId, title, teluguTitle, body, teluguBody, message, link, data } = req.body || {};
+      if (!targetUserId) {
+        res.status(400).json({ success: false, error: 'targetUserId is required' });
+        return;
+      }
+
+      const recipient = await resolveRecipientUser(String(targetUserId));
+      if (!recipient?._id) {
+        res.json({ success: true, deliveredCount: 0, reason: 'user_not_found' });
+        return;
+      }
+
+      const recipientOid = new mongoose.Types.ObjectId(String(recipient._id));
+      const actorIdStr = req.userId || message?.senderId;
+      const actorOid =
+        actorIdStr && mongoose.Types.ObjectId.isValid(String(actorIdStr))
+          ? new mongoose.Types.ObjectId(String(actorIdStr))
+          : undefined;
+
+      const messageId = message?.id ? String(message.id) : undefined;
+      const senderName = message?.senderName || 'Mitrudu';
+      const senderTeluguName = message?.senderTeluguName || senderName;
+      const senderHandle = message?.senderHandle || '';
+      const senderAvatar = message?.senderAvatar || '';
+
+      const rawBody = String(body || message?.text || 'You received a new message');
+      const shortBody = rawBody.length > 80 ? `${rawBody.slice(0, 77)}...` : rawBody;
+      const resolvedTitle = title || (message?.senderName ? `💬 ${senderName}` : 'New Message');
+      const resolvedTeluguTitle =
+        teluguTitle || (senderTeluguName ? `${senderTeluguName} నుండి సందేశం` : resolvedTitle);
+      const resolvedLink =
+        link ||
+        (senderHandle || actorIdStr
+          ? `/messages?user=${encodeURIComponent(String(senderHandle || actorIdStr))}`
+          : '/messages');
+
+      // Avoid duplicating DB & socket notification if MessageService already created one for this messageId
+      let alreadySaved = false;
+      if (messageId) {
+        const existing = await NotificationModel.findOne({
+          recipient: recipientOid,
+          'data.messageId': messageId,
+        })
+          .select('_id')
+          .lean();
+        alreadySaved = Boolean(existing);
+      }
+
+      if (!alreadySaved) {
+        const notif = await NotificationModel.create({
+          recipient: recipientOid,
+          actor: actorOid,
           type: 'message',
-          title: title || 'New Message',
-          body: body || 'You received a new message',
+          title: resolvedTitle,
+          teluguTitle: resolvedTeluguTitle,
+          body: shortBody,
+          teluguBody: teluguBody || shortBody,
+          data: {
+            ...(data || {}),
+            ...(messageId ? { messageId } : {}),
+            ...(actorIdStr ? { senderId: String(actorIdStr) } : {}),
+            ...(senderHandle ? { senderHandle } : {}),
+          },
+          link: resolvedLink,
           isRead: false,
         });
+
+        socketManager.emitToUser(String(recipientOid), 'notification:new', {
+          notification: {
+            id: notif._id.toString(),
+            type: 'message',
+            title: notif.title,
+            teluguTitle: notif.teluguTitle,
+            body: notif.body,
+            teluguBody: notif.teluguBody,
+            actor: actorIdStr
+              ? {
+                  id: String(actorIdStr),
+                  name: senderName,
+                  teluguName: senderTeluguName,
+                  handle: senderHandle,
+                  avatar: senderAvatar,
+                }
+              : undefined,
+            link: notif.link,
+            createdAt: notif.createdAt,
+            isRead: false,
+          },
+        });
       }
-      res.json({ success: true });
-    } catch {
-      res.json({ success: true });
+
+      let deliveredCount = 0;
+      if (!markPushDispatchedForMessage(messageId)) {
+        const pushRes = await sendPushToUser(String(recipientOid), {
+          title: resolvedTitle,
+          body: shortBody,
+          image: senderAvatar || undefined,
+          link: resolvedLink,
+          tag: `mitrulu-dm-${actorIdStr || recipientOid}`,
+          priority: 'high',
+          data: {
+            action: 'direct_message',
+            ...(messageId ? { messageId } : {}),
+            ...(actorIdStr ? { senderId: String(actorIdStr) } : {}),
+          },
+        });
+        deliveredCount = pushRes.deliveredCount;
+      }
+
+      res.json({ success: true, deliveredCount });
+    } catch (err: any) {
+      console.warn('[NotificationController.dispatchDmPush error]:', err?.message || err);
+      res.json({ success: true, deliveredCount: 0 });
     }
   }
 }

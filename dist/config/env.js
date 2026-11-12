@@ -1,7 +1,14 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ALLOWED_ORIGINS = exports.LIVEKIT_HTTP_URL = exports.LIVEKIT_API_SECRET = exports.LIVEKIT_API_KEY = exports.LIVEKIT_URL = exports.JWT_SECRET = exports.MONGO_URI = exports.PORT = void 0;
-require("dotenv/config");
+const dotenv_1 = __importDefault(require("dotenv"));
+const path_1 = __importDefault(require("path"));
+dotenv_1.default.config();
+// Fallback for missing env vars (e.g. FIREBASE_* keys shared with mitruluweb locally)
+dotenv_1.default.config({ path: path_1.default.resolve(__dirname, '../../../mitruluweb/.env') });
 exports.PORT = Number(process.env.PORT) || 5001;
 exports.MONGO_URI = process.env.MONGO_URI ||
     'mongodb+srv://techzoommedia_db_user:1k6rMUI3yxcX4YTq@cluster0.mmlkjl0.mongodb.net/?appName=Cluster0';

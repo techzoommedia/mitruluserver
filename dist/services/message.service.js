@@ -10,6 +10,7 @@ const message_model_1 = require("../models/message.model");
 const user_model_1 = require("../models/user.model");
 const notification_model_1 = __importDefault(require("../models/notification.model"));
 const socket_manager_1 = require("../sockets/socket.manager");
+const push_service_1 = require("./push.service");
 class MessageService {
     /**
      * Resolve any user identifier (MongoDB _id, handle, mitraId) into a canonical DB User
@@ -236,6 +237,22 @@ class MessageService {
                 socket_manager_1.socketManager.emitToUser(canonicalTargetId, 'notification:new', { notification: notifPayload });
                 if (cleanTargetId !== canonicalTargetId) {
                     socket_manager_1.socketManager.emitToUser(cleanTargetId, 'notification:new', { notification: notifPayload });
+                }
+                if (!(0, push_service_1.markPushDispatchedForMessage)(messageId)) {
+                    const shortBody = text.length > 80 ? `${text.slice(0, 77)}...` : text;
+                    (0, push_service_1.sendPushToUser)(canonicalTargetId, {
+                        title: `💬 ${senderName || 'Mitrudu'}`,
+                        body: shortBody,
+                        image: senderAvatar || undefined,
+                        link: notif.link,
+                        tag: `mitrulu-dm-${canonicalSenderId}`,
+                        priority: 'high',
+                        data: {
+                            action: 'direct_message',
+                            senderId: canonicalSenderId,
+                            messageId,
+                        },
+                    }).catch(() => { });
                 }
             })
                 .catch((err) => {

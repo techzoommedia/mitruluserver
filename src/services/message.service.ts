@@ -4,6 +4,7 @@ import { buildConversationKey, IDirectMessage, MessageStatus } from '../models/m
 import { UserModel, IUser } from '../models/user.model';
 import NotificationModel from '../models/notification.model';
 import { socketManager } from '../sockets/socket.manager';
+import { markPushDispatchedForMessage, sendPushToUser } from './push.service';
 
 export interface SendMessageDTO {
   id?: string;
@@ -273,6 +274,23 @@ export class MessageService {
           socketManager.emitToUser(canonicalTargetId, 'notification:new', { notification: notifPayload });
           if (cleanTargetId !== canonicalTargetId) {
             socketManager.emitToUser(cleanTargetId, 'notification:new', { notification: notifPayload });
+          }
+
+          if (!markPushDispatchedForMessage(messageId)) {
+            const shortBody = text.length > 80 ? `${text.slice(0, 77)}...` : text;
+            sendPushToUser(canonicalTargetId, {
+              title: `💬 ${senderName || 'Mitrudu'}`,
+              body: shortBody,
+              image: senderAvatar || undefined,
+              link: notif.link,
+              tag: `mitrulu-dm-${canonicalSenderId}`,
+              priority: 'high',
+              data: {
+                action: 'direct_message',
+                senderId: canonicalSenderId,
+                messageId,
+              },
+            }).catch(() => {});
           }
         })
         .catch((err) => {
