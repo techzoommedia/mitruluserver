@@ -7,10 +7,13 @@ class MessageRepository {
         const doc = await message_model_1.DirectMessageModel.findOneAndUpdate({ id: data.id }, { $set: data }, { upsert: true, new: true, setDefaultsOnInsert: true }).lean().exec();
         return doc;
     }
-    async findMessages(query, limit = 30, before) {
+    async findMessages(query, limit = 30, before, excludeForIds) {
         const filter = { ...query };
         if (before && !isNaN(before)) {
             filter.timestamp = { $lt: before };
+        }
+        if (Array.isArray(excludeForIds) && excludeForIds.length > 0) {
+            filter.deletedFor = { $nin: excludeForIds };
         }
         const docs = await message_model_1.DirectMessageModel.find(filter)
             .sort({ timestamp: -1 })
@@ -19,15 +22,35 @@ class MessageRepository {
             .exec();
         return docs;
     }
+    async findMessageById(messageId) {
+        return message_model_1.DirectMessageModel.findOne({ id: messageId }).lean().exec();
+    }
+    async updateMessageText(messageId, text, editedAt) {
+        return message_model_1.DirectMessageModel.findOneAndUpdate({ id: messageId }, { $set: { text, isEdited: true, editedAt } }, { new: true })
+            .lean()
+            .exec();
+    }
+    async deleteMessageById(messageId) {
+        const res = await message_model_1.DirectMessageModel.deleteOne({ id: messageId }).exec();
+        return res.deletedCount || 0;
+    }
+    async markDeletedForUser(messageId, userIds) {
+        const res = await message_model_1.DirectMessageModel.updateOne({ id: messageId }, { $addToSet: { deletedFor: { $each: userIds } } }).exec();
+        return res.modifiedCount || 0;
+    }
     async updateManyStatus(filter, status) {
         const res = await message_model_1.DirectMessageModel.updateMany(filter, { $set: { status } }).exec();
         return res.modifiedCount;
     }
-    async aggregateConversations(myId) {
+    async aggregateConversations(myIds) {
+        const ids = Array.isArray(myIds) ? myIds : [myIds];
         return message_model_1.DirectMessageModel.aggregate([
             {
                 $match: {
-                    $or: [{ senderId: myId }, { targetUserId: myId }],
+                    $and: [
+                        { $or: [{ senderId: { $in: ids } }, { targetUserId: { $in: ids } }] },
+                        { deletedFor: { $nin: ids } },
+                    ],
                 },
             },
             {
@@ -35,38 +58,25 @@ class MessageRepository {
             },
             {
                 $addFields: {
-                    _convKey: {
-                        $cond: {
-                            if: { $and: [{ $ifNull: ['$conversationKey', false] }, { $ne: ['$conversationKey', ''] }] },
-                            then: '$conversationKey',
-                            else: {
-                                $let: {
-                                    vars: {
-                                        sorted: {
-                                            $cond: {
-                                                if: { $lte: ['$senderId', '$targetUserId'] },
-                                                then: { $concat: ['$senderId', ':', '$targetUserId'] },
-                                                else: { $concat: ['$targetUserId', ':', '$senderId'] },
-                                            },
-                                        },
-                                    },
-                                    in: '$$sorted',
-                                },
-                            },
-                        },
+                    _partnerId: {
+                        $cond: [
+                            { $in: ['$senderId', ids] },
+                            '$targetUserId',
+                            '$senderId',
+                        ],
                     },
                 },
             },
             {
                 $group: {
-                    _id: '$_convKey',
+                    _id: '$_partnerId',
                     lastMessage: { $first: '$$ROOT' },
                     unreadCount: {
                         $sum: {
                             $cond: [
                                 {
                                     $and: [
-                                        { $eq: ['$targetUserId', myId] },
+                                        { $in: ['$targetUserId', ids] },
                                         { $ne: ['$status', 'seen'] },
                                     ],
                                 },
@@ -85,18 +95,31 @@ class MessageRepository {
             },
         ]);
     }
-    async deleteConversation(keys, userA, userB) {
-        const res = await message_model_1.DirectMessageModel.deleteMany({
+    async deleteConversation(keys, myIds, partnerIds, scope = 'both') {
+        const filter = {
             $or: [
                 { conversationKey: { $in: keys } },
                 {
                     $and: [
-                        { senderId: { $in: [userA, userB] } },
-                        { targetUserId: { $in: [userA, userB] } },
+                        { senderId: { $in: myIds } },
+                        { targetUserId: { $in: partnerIds } },
+                    ],
+                },
+                {
+                    $and: [
+                        { senderId: { $in: partnerIds } },
+                        { targetUserId: { $in: myIds } },
                     ],
                 },
             ],
-        }).exec();
+        };
+        if (scope === 'me') {
+            const res = await message_model_1.DirectMessageModel.updateMany(filter, {
+                $addToSet: { deletedFor: { $each: myIds } },
+            }).exec();
+            return res.modifiedCount || 0;
+        }
+        const res = await message_model_1.DirectMessageModel.deleteMany(filter).exec();
         return res.deletedCount || 0;
     }
 }

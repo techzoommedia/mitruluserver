@@ -1,0 +1,13 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const admin_controller_1 = require("../controllers/admin.controller");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const router = (0, express_1.Router)();
+router.get(['/api/admin/auth', '/api/admin/auth/', '/admin/auth', '/admin/auth/'], auth_middleware_1.optionalAuth, (req, res) => admin_controller_1.adminController.checkAuth(req, res));
+router.post(['/api/admin/auth', '/api/admin/auth/', '/admin/auth', '/admin/auth/'], auth_middleware_1.optionalAuth, (req, res) => admin_controller_1.adminController.login(req, res));
+router.get(['/api/admin/stats', '/api/admin/stats/', '/admin/stats', '/admin/stats/'], auth_middleware_1.optionalAuth, (req, res) => admin_controller_1.adminController.getStats(req, res));
+router.get(['/api/admin/users', '/api/admin/users/', '/admin/users', '/admin/users/'], auth_middleware_1.optionalAuth, (req, res) => admin_controller_1.adminController.getUsers(req, res));
+router.get(['/api/admin/moderation', '/api/admin/moderation/', '/admin/moderation', '/admin/moderation/'], auth_middleware_1.optionalAuth, (req, res) => admin_controller_1.adminController.getModerationQueue(req, res));
+router.post(['/api/admin/moderation', '/api/admin/moderation/', '/admin/moderation', '/admin/moderation/'], auth_middleware_1.optionalAuth, (req, res) => admin_controller_1.adminController.resolveReport(req, res));
+exports.default = router;

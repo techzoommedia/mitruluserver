@@ -36,15 +36,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.UserModel = exports.UserSchema = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
 exports.UserSchema = new mongoose_1.Schema({
+    email: { type: String, lowercase: true, trim: true },
     name: { type: String, required: true },
     teluguName: { type: String, required: true },
     handle: { type: String, required: true },
-    mitraId: { type: String },
+    mitraId: { type: String, sparse: true, index: true },
     avatar: { type: String, default: '' },
     bio: { type: String, default: '' },
     teluguBio: { type: String, default: '' },
     location: { type: String, default: 'హైదరాబాద్' },
     isVerified: { type: Boolean, default: false },
+    interests: { type: [String], default: [] },
+    friends: [{ type: mongoose_1.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    followers: [{ type: mongoose_1.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    following: [{ type: mongoose_1.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    friendRequestsSent: [{ type: mongoose_1.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    friendRequestsReceived: [{ type: mongoose_1.Schema.Types.ObjectId, ref: 'User', default: [] }],
+    blockedUsers: [{ type: mongoose_1.Schema.Types.ObjectId, ref: 'User', default: [] }],
     gender: { type: String, default: 'prefer_not_to_say' },
     profession: { type: String, default: '' },
     callCategory: { type: String, default: 'casuals' },
@@ -56,6 +64,52 @@ exports.UserSchema = new mongoose_1.Schema({
     callRateCoins: { type: Number, default: 500 },
     coins: { type: Number, default: 0 },
     earnedCoins: { type: Number, default: 0 },
+    coinsWithdrawn: { type: Number, default: 0 },
+    payoutRequests: [
+        {
+            amountCoins: { type: Number, required: true },
+            amountRupees: { type: Number, required: true },
+            upiId: { type: String, required: true },
+            status: { type: String, enum: ['pending', 'completed', 'rejected'], default: 'pending' },
+            requestedAt: { type: Date, default: Date.now },
+        },
+    ],
+    coinHistory: [
+        {
+            type: { type: String, enum: ['credit', 'debit'] },
+            action: { type: String },
+            amount: { type: Number },
+            balanceAfter: { type: Number },
+            description: { type: String },
+            teluguDescription: { type: String },
+            orderId: { type: String },
+            paymentId: { type: String },
+            adminNote: { type: String },
+            createdAt: { type: Date, default: Date.now },
+        },
+    ],
+    role: { type: String, enum: ['admin', 'author', 'user'], default: 'user' },
+    isAdmin: { type: Boolean, default: false },
+    isShielded: { type: Boolean, default: false },
+    seenPostIds: [{ type: String }],
+    scheduledDeletionAt: { type: Date, default: null },
+    moderationStatus: {
+        type: String,
+        enum: ['normal', 'warned', 'restricted_24h', 'suspended_7d', 'suspended_30d', 'banned'],
+        default: 'normal',
+    },
+    suspendedUntil: { type: Date, default: null },
+    moderationStrikes: { type: Number, default: 0 },
+    moderationNotes: [{ type: String }],
+    fcmTokens: [
+        {
+            token: { type: String, required: true },
+            platform: { type: String, enum: ['web', 'android', 'ios'], default: 'web' },
+            deviceName: { type: String },
+            updatedAt: { type: Date, default: Date.now },
+        },
+    ],
     lastSeen: { type: Date, default: Date.now, index: true },
 }, { collection: 'users', timestamps: true });
 exports.UserModel = mongoose_1.default.models.User || mongoose_1.default.model('User', exports.UserSchema);
+exports.default = exports.UserModel;

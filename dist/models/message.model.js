@@ -55,6 +55,9 @@ exports.DirectMessageSchema = new mongoose_1.Schema({
     timestamp: { type: Number, required: true, index: true },
     status: { type: String, enum: ['sent', 'delivered', 'seen'], default: 'sent', index: true },
     conversationKey: { type: String, required: true, index: true },
+    deletedFor: { type: [String], default: [], index: true },
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Number },
 }, {
     collection: 'directmessages',
     timestamps: true,

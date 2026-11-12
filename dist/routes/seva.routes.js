@@ -1,0 +1,12 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const seva_controller_1 = require("../controllers/seva.controller");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const router = (0, express_1.Router)();
+router.get(['/api/seva/institutions', '/api/seva/institutions/', '/seva/institutions', '/seva/institutions/'], (req, res) => seva_controller_1.sevaController.getInstitutions(req, res));
+router.get(['/api/seva/institutions/:slug', '/api/seva/institutions/:slug/', '/seva/institutions/:slug', '/seva/institutions/:slug/'], (req, res) => seva_controller_1.sevaController.getInstitutionBySlug(req, res));
+router.post(['/api/seva/donate/create-order', '/api/seva/donate/create-order/', '/seva/donate/create-order', '/seva/donate/create-order/'], auth_middleware_1.optionalAuth, (req, res) => seva_controller_1.sevaController.createDonationOrder(req, res));
+router.post(['/api/seva/donate/verify', '/api/seva/donate/verify/', '/seva/donate/verify', '/seva/donate/verify/'], auth_middleware_1.optionalAuth, (req, res) => seva_controller_1.sevaController.verifyDonation(req, res));
+router.get(['/api/seva/track/:trackingId', '/api/seva/track/:trackingId/', '/seva/track/:trackingId', '/seva/track/:trackingId/'], (req, res) => seva_controller_1.sevaController.trackDonation(req, res));
+exports.default = router;

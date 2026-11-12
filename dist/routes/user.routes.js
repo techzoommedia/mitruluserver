@@ -1,0 +1,15 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const user_controller_1 = require("../controllers/user.controller");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const router = (0, express_1.Router)();
+router.get(['/api/users', '/api/users/', '/users', '/users/'], auth_middleware_1.optionalAuth, (req, res) => user_controller_1.userController.getUsers(req, res));
+router.get(['/api/users/profile', '/api/users/profile/', '/users/profile', '/users/profile/'], auth_middleware_1.optionalAuth, (req, res) => user_controller_1.userController.getProfile(req, res));
+router.post(['/api/users/profile', '/api/users/profile/', '/users/profile', '/users/profile/'], auth_middleware_1.requireAuth, (req, res) => user_controller_1.userController.updateProfile(req, res));
+router.post(['/api/users/follow', '/api/users/follow/', '/users/follow', '/users/follow/'], auth_middleware_1.requireAuth, (req, res) => user_controller_1.userController.toggleFollow(req, res));
+router.post(['/api/users/friend', '/api/users/friend/', '/users/friend', '/users/friend/'], auth_middleware_1.requireAuth, (req, res) => user_controller_1.userController.toggleFriend(req, res));
+router.get(['/api/users/block', '/api/users/block/', '/users/block', '/users/block/'], auth_middleware_1.requireAuth, (req, res) => user_controller_1.userController.getBlocked(req, res));
+router.post(['/api/users/block', '/api/users/block/', '/users/block', '/users/block/'], auth_middleware_1.requireAuth, (req, res) => user_controller_1.userController.toggleBlock(req, res));
+router.post(['/api/users/delete-account', '/api/users/delete-account/', '/users/delete-account', '/users/delete-account/'], auth_middleware_1.requireAuth, (req, res) => user_controller_1.userController.deleteAccount(req, res));
+exports.default = router;
