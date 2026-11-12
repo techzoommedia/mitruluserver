@@ -241,6 +241,7 @@ class MessageService {
                 if (!(0, push_service_1.markPushDispatchedForMessage)(messageId)) {
                     const shortBody = text.length > 80 ? `${text.slice(0, 77)}...` : text;
                     (0, push_service_1.sendPushToUser)(canonicalTargetId, {
+                        type: 'message',
                         title: `💬 ${senderName || 'Mitrudu'}`,
                         body: shortBody,
                         image: senderAvatar || undefined,
@@ -248,8 +249,10 @@ class MessageService {
                         tag: `mitrulu-dm-${canonicalSenderId}`,
                         priority: 'high',
                         data: {
+                            type: 'message',
                             action: 'direct_message',
                             senderId: canonicalSenderId,
+                            senderName: senderName || 'Mitrudu',
                             messageId,
                         },
                     }).catch(() => { });

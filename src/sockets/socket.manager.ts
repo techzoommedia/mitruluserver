@@ -9,6 +9,7 @@ import { communityRoomStoreService } from '../services/room-store.service';
 import { UserModel } from '../models/user.model';
 import { messageService } from '../services/message.service';
 import { groupMessageService } from '../services/group-message.service';
+import { sendIncomingCallPush } from '../services/push.service';
 
 export class SocketManager {
   private io: SocketIOServer | null = null;
@@ -258,6 +259,17 @@ export class SocketManager {
 
           // Emit incoming alert to target user
           this.emitToUser(targetUserId, 'call:incoming', result.incomingPayload);
+
+          // Also send Firebase Push Notification labeled explicitly as incoming_call
+          sendIncomingCallPush({
+            targetUserId: String(targetUserId),
+            callerId: result.incomingPayload.caller.id,
+            callerName: result.incomingPayload.caller.name,
+            callerAvatar: result.incomingPayload.caller.avatar,
+            callType: result.incomingPayload.callType,
+            callId: result.incomingPayload.callId,
+            roomName: result.incomingPayload.roomName,
+          }).catch(() => {});
 
           const callId = result.session.callId;
           const costCoins = result.costCoins;

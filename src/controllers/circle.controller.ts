@@ -4,6 +4,7 @@ import { JWT_SECRET } from '../config/env';
 import { userService } from '../services/user.service';
 import { communityRoomService } from '../services/community-room.service';
 import { socketManager } from '../sockets/socket.manager';
+import { sendIncomingCallPush } from '../services/push.service';
 
 export class CircleController {
   async getActiveUsers(req: Request, res: Response): Promise<void> {
@@ -145,6 +146,15 @@ export class CircleController {
     }
     console.log(`[CircleSocket] Forwarding incoming call alert to user_${targetUserId}`);
     socketManager.emitToUser(targetUserId, 'call:incoming', call);
+    sendIncomingCallPush({
+      targetUserId: String(targetUserId),
+      callerId: call.caller?.id || '',
+      callerName: call.caller?.name || 'Mitrudu',
+      callerAvatar: call.caller?.avatar,
+      callType: call.callType === 'video' ? 'video' : 'audio',
+      callId: call.callId || '',
+      roomName: call.roomName || '',
+    }).catch(() => {});
     res.json({ success: true });
   }
 

@@ -9,6 +9,7 @@ const env_1 = require("../config/env");
 const user_service_1 = require("../services/user.service");
 const community_room_service_1 = require("../services/community-room.service");
 const socket_manager_1 = require("../sockets/socket.manager");
+const push_service_1 = require("../services/push.service");
 class CircleController {
     async getActiveUsers(req, res) {
         try {
@@ -146,6 +147,15 @@ class CircleController {
         }
         console.log(`[CircleSocket] Forwarding incoming call alert to user_${targetUserId}`);
         socket_manager_1.socketManager.emitToUser(targetUserId, 'call:incoming', call);
+        (0, push_service_1.sendIncomingCallPush)({
+            targetUserId: String(targetUserId),
+            callerId: call.caller?.id || '',
+            callerName: call.caller?.name || 'Mitrudu',
+            callerAvatar: call.caller?.avatar,
+            callType: call.callType === 'video' ? 'video' : 'audio',
+            callId: call.callId || '',
+            roomName: call.roomName || '',
+        }).catch(() => { });
         res.json({ success: true });
     }
     notifyCallResponse(req, res) {

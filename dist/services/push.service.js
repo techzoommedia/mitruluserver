@@ -7,6 +7,7 @@ exports.markPushDispatchedForMessage = markPushDispatchedForMessage;
 exports.getFirebaseAdmin = getFirebaseAdmin;
 exports.resolveRecipientUser = resolveRecipientUser;
 exports.sendPushToUser = sendPushToUser;
+exports.sendIncomingCallPush = sendIncomingCallPush;
 const app_1 = require("firebase-admin/app");
 const messaging_1 = require("firebase-admin/messaging");
 const mongoose_1 = __importDefault(require("mongoose"));
@@ -130,9 +131,17 @@ async function sendPushToUser(targetUserId, payload) {
                 }
             }
         }
+        stringData.type = stringData.type || payload.type || 'system';
+        stringData.title = stringData.title || payload.title;
+        stringData.body = stringData.body || payload.body;
+        stringData.tag = stringData.tag || payload.tag || 'mitrulu-notification';
+        if (payload.image && !stringData.image) {
+            stringData.image = payload.image;
+        }
         if (payload.link) {
             stringData.link = payload.link;
         }
+        const isCallPush = stringData.type === 'call' || stringData.action === 'incoming_call';
         const messaging = (0, messaging_1.getMessaging)(app);
         const multicastMessage = {
             tokens: tokensList,
@@ -149,8 +158,8 @@ async function sendPushToUser(targetUserId, payload) {
                     icon: '/pwa-icon-192.png',
                     badge: '/pwa-icon-192.png',
                     tag: payload.tag || 'mitrulu-notification',
-                    vibrate: [200, 100, 200],
-                    requireInteraction: payload.priority === 'high',
+                    vibrate: isCallPush ? [350, 150, 350, 150, 500] : [200, 100, 200],
+                    requireInteraction: isCallPush,
                 },
                 fcmOptions: {
                     link: payload.link || 'https://mitrulu.in',
@@ -201,4 +210,25 @@ async function sendPushToUser(targetUserId, payload) {
         console.error('[PushService] sendPushToUser error:', err?.message || err);
         return { success: false, deliveredCount: 0, reason: err?.message };
     }
+}
+async function sendIncomingCallPush(params) {
+    const link = `/call/${encodeURIComponent(params.roomName)}?callId=${encodeURIComponent(params.callId)}&type=${params.callType}`;
+    await sendPushToUser(params.targetUserId, {
+        type: 'call',
+        title: `📞 ${params.callerName} is calling you`,
+        body: `Tap to answer ${params.callType} call on Mitrulu Circle`,
+        image: params.callerAvatar || undefined,
+        link,
+        tag: `call-${params.callId}`,
+        priority: 'high',
+        data: {
+            type: 'call',
+            action: 'incoming_call',
+            callId: params.callId,
+            roomName: params.roomName,
+            callType: params.callType,
+            callerId: params.callerId,
+            callerName: params.callerName,
+        },
+    }).catch(() => { });
 }

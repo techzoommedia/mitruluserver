@@ -186,6 +186,7 @@ class NotificationController {
             let deliveredCount = 0;
             if (!(0, push_service_1.markPushDispatchedForMessage)(messageId)) {
                 const pushRes = await (0, push_service_1.sendPushToUser)(String(recipientOid), {
+                    type: 'message',
                     title: resolvedTitle,
                     body: shortBody,
                     image: senderAvatar || undefined,
@@ -193,9 +194,11 @@ class NotificationController {
                     tag: `mitrulu-dm-${actorIdStr || recipientOid}`,
                     priority: 'high',
                     data: {
+                        type: 'message',
                         action: 'direct_message',
                         ...(messageId ? { messageId } : {}),
                         ...(actorIdStr ? { senderId: String(actorIdStr) } : {}),
+                        senderName,
                     },
                 });
                 deliveredCount = pushRes.deliveredCount;

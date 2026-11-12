@@ -14,6 +14,7 @@ const room_store_service_1 = require("../services/room-store.service");
 const user_model_1 = require("../models/user.model");
 const message_service_1 = require("../services/message.service");
 const group_message_service_1 = require("../services/group-message.service");
+const push_service_1 = require("../services/push.service");
 class SocketManager {
     io = null;
     userSocketsMap = new Map();
@@ -237,6 +238,16 @@ class SocketManager {
                     const result = await call_service_1.callService.startCall(callerId, targetUserId, callType);
                     // Emit incoming alert to target user
                     this.emitToUser(targetUserId, 'call:incoming', result.incomingPayload);
+                    // Also send Firebase Push Notification labeled explicitly as incoming_call
+                    (0, push_service_1.sendIncomingCallPush)({
+                        targetUserId: String(targetUserId),
+                        callerId: result.incomingPayload.caller.id,
+                        callerName: result.incomingPayload.caller.name,
+                        callerAvatar: result.incomingPayload.caller.avatar,
+                        callType: result.incomingPayload.callType,
+                        callId: result.incomingPayload.callId,
+                        roomName: result.incomingPayload.roomName,
+                    }).catch(() => { });
                     const callId = result.session.callId;
                     const costCoins = result.costCoins;
                     // 60-second auto-timeout

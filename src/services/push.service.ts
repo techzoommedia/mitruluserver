@@ -82,6 +82,7 @@ export function getFirebaseAdmin(): App | null {
 }
 
 export interface PushPayload {
+  type?: 'message' | 'call' | 'system';
   title: string;
   body: string;
   image?: string;
@@ -142,9 +143,18 @@ export async function sendPushToUser(
         }
       }
     }
+    stringData.type = stringData.type || payload.type || 'system';
+    stringData.title = stringData.title || payload.title;
+    stringData.body = stringData.body || payload.body;
+    stringData.tag = stringData.tag || payload.tag || 'mitrulu-notification';
+    if (payload.image && !stringData.image) {
+      stringData.image = payload.image;
+    }
     if (payload.link) {
       stringData.link = payload.link;
     }
+
+    const isCallPush = stringData.type === 'call' || stringData.action === 'incoming_call';
 
     const messaging = getMessaging(app);
     const multicastMessage: MulticastMessage = {
@@ -162,8 +172,8 @@ export async function sendPushToUser(
           icon: '/pwa-icon-192.png',
           badge: '/pwa-icon-192.png',
           tag: payload.tag || 'mitrulu-notification',
-          vibrate: [200, 100, 200],
-          requireInteraction: payload.priority === 'high',
+          vibrate: isCallPush ? [350, 150, 350, 150, 500] : [200, 100, 200],
+          requireInteraction: isCallPush,
         },
         fcmOptions: {
           link: payload.link || 'https://mitrulu.in',
@@ -219,5 +229,35 @@ export async function sendPushToUser(
     console.error('[PushService] sendPushToUser error:', err?.message || err);
     return { success: false, deliveredCount: 0, reason: err?.message };
   }
+}
+
+export async function sendIncomingCallPush(params: {
+  targetUserId: string;
+  callerId: string;
+  callerName: string;
+  callerAvatar?: string;
+  callType: 'audio' | 'video';
+  callId: string;
+  roomName: string;
+}): Promise<void> {
+  const link = `/call/${encodeURIComponent(params.roomName)}?callId=${encodeURIComponent(params.callId)}&type=${params.callType}`;
+  await sendPushToUser(params.targetUserId, {
+    type: 'call',
+    title: `📞 ${params.callerName} is calling you`,
+    body: `Tap to answer ${params.callType} call on Mitrulu Circle`,
+    image: params.callerAvatar || undefined,
+    link,
+    tag: `call-${params.callId}`,
+    priority: 'high',
+    data: {
+      type: 'call',
+      action: 'incoming_call',
+      callId: params.callId,
+      roomName: params.roomName,
+      callType: params.callType,
+      callerId: params.callerId,
+      callerName: params.callerName,
+    },
+  }).catch(() => {});
 }
 
