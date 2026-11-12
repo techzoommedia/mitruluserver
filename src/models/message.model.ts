@@ -22,6 +22,9 @@ export interface IDirectMessage extends Document {
   timestamp: number;
   status: MessageStatus;
   conversationKey: string;
+  deletedFor?: string[];
+  isEdited?: boolean;
+  editedAt?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -46,6 +49,9 @@ export const DirectMessageSchema = new Schema<IDirectMessage>(
     timestamp: { type: Number, required: true, index: true },
     status: { type: String, enum: ['sent', 'delivered', 'seen'], default: 'sent', index: true },
     conversationKey: { type: String, required: true, index: true },
+    deletedFor: { type: [String], default: [], index: true },
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Number },
   },
   {
     collection: 'directmessages',

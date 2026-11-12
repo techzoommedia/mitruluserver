@@ -43,6 +43,86 @@ export class MessageService {
   }
 
   /**
+   * Collect all exact + normalized identity strings for a user
+   */
+  getCanonicalIdsForUser(identifier: string, dbUser?: any): string[] {
+    const ids = new Set<string>();
+    const add = (val?: string) => {
+      if (!val) return;
+      const clean = String(val).trim();
+      if (!clean) return;
+      ids.add(clean);
+      ids.add(clean.toLowerCase());
+      const noAt = clean.replace(/^@/, '');
+      if (noAt) {
+        ids.add(noAt);
+        ids.add(noAt.toLowerCase());
+      }
+    };
+
+    add(identifier);
+    if (dbUser) {
+      if (dbUser._id) add(String(dbUser._id));
+      if (dbUser.id) add(String(dbUser.id));
+      if (dbUser.handle) add(String(dbUser.handle));
+      if (dbUser.mitraId) add(String(dbUser.mitraId));
+    }
+
+    return Array.from(ids);
+  }
+
+  private emitToUserIdentities(
+    rawId: string,
+    dbUser: any,
+    event: string,
+    payload: any,
+    exceptSocketId?: string
+  ): void {
+    const rooms = new Set<string>();
+    if (rawId) rooms.add(String(rawId).trim());
+    if (dbUser) {
+      if (dbUser._id) rooms.add(String(dbUser._id));
+      if (dbUser.handle) {
+        rooms.add(String(dbUser.handle));
+        rooms.add(String(dbUser.handle).toLowerCase());
+      }
+      if (dbUser.mitraId) {
+        rooms.add(String(dbUser.mitraId));
+        rooms.add(String(dbUser.mitraId).toLowerCase());
+      }
+    }
+    rooms.forEach((uid) => {
+      if (uid) {
+        socketManager.emitToUser(uid, event, payload, exceptSocketId);
+      }
+    });
+  }
+
+  private toPublicMessage(d: any) {
+    return {
+      id: d.id,
+      senderId: d.senderId,
+      senderName: d.senderName,
+      senderAvatar: d.senderAvatar || '',
+      senderHandle: d.senderHandle || '',
+      senderTeluguName: d.senderTeluguName || '',
+      targetUserId: d.targetUserId,
+      targetUserName: d.targetUserName,
+      targetUserAvatar: d.targetUserAvatar || '',
+      targetUserHandle: d.targetUserHandle || '',
+      targetUserTeluguName: d.targetUserTeluguName || '',
+      text: d.text,
+      mediaUrl: d.mediaUrl || '',
+      mediaType: d.mediaType,
+      audioDuration: d.audioDuration,
+      timestamp: d.timestamp,
+      status: d.status || 'sent',
+      isEdited: Boolean(d.isEdited),
+      editedAt: d.editedAt,
+    };
+  }
+
+  /**
    * Send and persist a new message with real-time socket transmission and ACK
    */
   async sendMessage(data: SendMessageDTO, senderSocketId?: string): Promise<any> {
@@ -111,25 +191,7 @@ export class MessageService {
     // 1. Guaranteed database persistence in MongoDB
     const saved = await messageRepository.upsertMessage(messageToSave as any);
 
-    const publicMessage = {
-      id: saved.id,
-      senderId: saved.senderId,
-      senderName: saved.senderName,
-      senderAvatar: saved.senderAvatar || '',
-      senderHandle: saved.senderHandle || '',
-      senderTeluguName: saved.senderTeluguName || '',
-      targetUserId: saved.targetUserId,
-      targetUserName: saved.targetUserName,
-      targetUserAvatar: saved.targetUserAvatar || '',
-      targetUserHandle: saved.targetUserHandle || '',
-      targetUserTeluguName: saved.targetUserTeluguName || '',
-      text: saved.text,
-      mediaUrl: saved.mediaUrl || '',
-      mediaType: saved.mediaType,
-      audioDuration: saved.audioDuration,
-      timestamp: saved.timestamp,
-      status: saved.status,
-    };
+    const publicMessage = this.toPublicMessage(saved);
 
     // 2. Real-time 0ms delivery via Socket.io
     const payload = {
@@ -239,68 +301,43 @@ export class MessageService {
     ]);
 
     const canonicalMyId = dbSender ? String(dbSender._id) : cleanMyId;
-    const myCanonicalIds = new Set<string>();
-    myCanonicalIds.add(cleanMyId.toLowerCase());
-    myCanonicalIds.add(canonicalMyId.toLowerCase());
-    if (dbSender) {
-      if (dbSender.mitraId) myCanonicalIds.add(dbSender.mitraId.toLowerCase());
-      if (dbSender.handle) myCanonicalIds.add(dbSender.handle.toLowerCase());
-    }
-
-    const partnerCanonicalIds = new Set<string>();
-    partnerCanonicalIds.add(cleanPartnerId.toLowerCase());
-    if (dbPartner) {
-      partnerCanonicalIds.add(String(dbPartner._id).toLowerCase());
-      if (dbPartner.mitraId) partnerCanonicalIds.add(dbPartner.mitraId.toLowerCase());
-      if (dbPartner.handle) partnerCanonicalIds.add(dbPartner.handle.toLowerCase());
-    }
+    const myIdsList = this.getCanonicalIdsForUser(cleanMyId, dbSender);
+    const partnerIdsList = this.getCanonicalIdsForUser(cleanPartnerId, dbPartner);
 
     // Build all candidate conversation keys
-    const conversationKeys: string[] = [];
-    for (const m of myCanonicalIds) {
-      for (const p of partnerCanonicalIds) {
-        conversationKeys.push(buildConversationKey(m, p));
+    const conversationKeysSet = new Set<string>();
+    for (const m of myIdsList) {
+      for (const p of partnerIdsList) {
+        conversationKeysSet.add(buildConversationKey(m, p));
       }
     }
 
     const query: any = {
       $or: [
-        { conversationKey: { $in: conversationKeys } },
+        { conversationKey: { $in: Array.from(conversationKeysSet) } },
         {
           $and: [
-            { senderId: { $in: [...Array.from(myCanonicalIds), ...Array.from(partnerCanonicalIds)] } },
-            { targetUserId: { $in: [...Array.from(myCanonicalIds), ...Array.from(partnerCanonicalIds)] } },
+            { senderId: { $in: myIdsList } },
+            { targetUserId: { $in: partnerIdsList } },
+          ],
+        },
+        {
+          $and: [
+            { senderId: { $in: partnerIdsList } },
+            { targetUserId: { $in: myIdsList } },
           ],
         },
       ],
     };
 
     const maxLimit = Math.min(Math.max(limit, 5), 100);
-    const docs = await messageRepository.findMessages(query, maxLimit + 1, before);
+    const docs = await messageRepository.findMessages(query, maxLimit + 1, before, myIdsList);
 
     const hasMore = docs.length > maxLimit;
     const paginatedDocs = hasMore ? docs.slice(0, maxLimit) : docs;
 
     // Return in chronological order (oldest to newest for chat UI)
-    const messages = paginatedDocs.reverse().map((d) => ({
-      id: d.id,
-      senderId: d.senderId,
-      senderName: d.senderName,
-      senderAvatar: d.senderAvatar || '',
-      senderHandle: d.senderHandle || '',
-      senderTeluguName: d.senderTeluguName || '',
-      targetUserId: d.targetUserId,
-      targetUserName: d.targetUserName,
-      targetUserAvatar: d.targetUserAvatar || '',
-      targetUserHandle: d.targetUserHandle || '',
-      targetUserTeluguName: d.targetUserTeluguName || '',
-      text: d.text,
-      mediaUrl: d.mediaUrl || '',
-      mediaType: d.mediaType,
-      audioDuration: d.audioDuration,
-      timestamp: d.timestamp,
-      status: d.status || 'sent',
-    }));
+    const messages = paginatedDocs.reverse().map((d) => this.toPublicMessage(d));
 
     return {
       messages,
@@ -426,24 +463,7 @@ export class MessageService {
       })
       .map((v) => ({
       targetUser: v.fallbackUser,
-      lastMessage: {
-        id: v.lastMessage.id,
-        senderId: v.lastMessage.senderId,
-        senderName: v.lastMessage.senderName,
-        senderAvatar: v.lastMessage.senderAvatar || '',
-        senderHandle: v.lastMessage.senderHandle || '',
-        senderTeluguName: v.lastMessage.senderTeluguName || '',
-        targetUserId: v.lastMessage.targetUserId,
-        targetUserName: v.lastMessage.targetUserName,
-        targetUserAvatar: v.lastMessage.targetUserAvatar || '',
-        targetUserHandle: v.lastMessage.targetUserHandle || '',
-        targetUserTeluguName: v.lastMessage.targetUserTeluguName || '',
-        text: v.lastMessage.text,
-        mediaUrl: v.lastMessage.mediaUrl || '',
-        mediaType: v.lastMessage.mediaType,
-        timestamp: v.lastMessage.timestamp,
-        status: v.lastMessage.status || 'sent',
-      },
+      lastMessage: this.toPublicMessage(v.lastMessage),
       unreadCount: v.unreadCount,
     }));
   }
@@ -543,11 +563,157 @@ export class MessageService {
   }
 
   /**
-   * Delete conversation between user and partner
+   * Edit a sent direct message (sender only) and sync in real time to both users
    */
-  async deleteConversation(myId: string, partnerId: string): Promise<{ success: boolean; deletedCount: number }> {
+  async editMessage(
+    myId: string,
+    messageId: string,
+    newText: string,
+    senderSocketId?: string
+  ): Promise<any> {
+    const trimmed = String(newText || '').trim();
+    if (!trimmed) {
+      throw new Error('Updated message text is required');
+    }
+
+    const msg = await messageRepository.findMessageById(messageId);
+    if (!msg) {
+      throw new Error('Message not found');
+    }
+
+    const dbMe = await this.resolveUser(String(myId).trim());
+    const myIdsLower = new Set(
+      this.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase())
+    );
+
+    const msgSenderId = String(msg.senderId || '').toLowerCase();
+    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
+    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
+    if (!isSender) {
+      throw new Error('Forbidden: Only the sender can edit this message');
+    }
+
+    const editedAt = Date.now();
+    const updated = await messageRepository.updateMessageText(messageId, trimmed, editedAt);
+    const publicMessage = this.toPublicMessage(updated || { ...msg, text: trimmed, isEdited: true, editedAt });
+
+    const dbPartner = await this.resolveUser(String(msg.targetUserId || '').trim());
+    const payload = {
+      messageId,
+      text: publicMessage.text,
+      isEdited: true,
+      editedAt,
+      senderId: msg.senderId,
+      targetUserId: msg.targetUserId,
+      message: publicMessage,
+    };
+
+    this.emitToUserIdentities(msg.targetUserId, dbPartner, 'direct:message-edited', payload);
+    this.emitToUserIdentities(msg.senderId, dbMe, 'direct:message-edited', payload, senderSocketId);
+
+    return publicMessage;
+  }
+
+  /**
+   * Unsend a sent direct message for both sides (sender only)
+   */
+  async unsendMessage(
+    myId: string,
+    messageId: string,
+    senderSocketId?: string
+  ): Promise<{ success: boolean; messageId: string; deletedCount: number }> {
+    const msg = await messageRepository.findMessageById(messageId);
+    if (!msg) {
+      return { success: true, messageId, deletedCount: 0 };
+    }
+
+    const dbMe = await this.resolveUser(String(myId).trim());
+    const myIdsLower = new Set(
+      this.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase())
+    );
+
+    const msgSenderId = String(msg.senderId || '').toLowerCase();
+    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
+    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
+    if (!isSender) {
+      throw new Error('Forbidden: Only the sender can unsend this message');
+    }
+
+    const deletedCount = await messageRepository.deleteMessageById(messageId);
+    const dbPartner = await this.resolveUser(String(msg.targetUserId || '').trim());
+
+    const payload = {
+      messageId,
+      senderId: msg.senderId,
+      targetUserId: msg.targetUserId,
+      conversationKey: msg.conversationKey,
+    };
+
+    this.emitToUserIdentities(msg.targetUserId, dbPartner, 'direct:message-unsent', payload);
+    this.emitToUserIdentities(msg.senderId, dbMe, 'direct:message-unsent', payload, senderSocketId);
+
+    return { success: true, messageId, deletedCount };
+  }
+
+  /**
+   * Delete a direct message only for the requesting user (keeps it for the partner)
+   */
+  async deleteMessageForMe(
+    myId: string,
+    messageId: string,
+    senderSocketId?: string
+  ): Promise<{ success: boolean; messageId: string }> {
+    const msg = await messageRepository.findMessageById(messageId);
+    if (!msg) {
+      return { success: true, messageId };
+    }
+
+    const cleanMyId = String(myId).trim();
+    const dbMe = await this.resolveUser(cleanMyId);
+    const myIdsList = this.getCanonicalIdsForUser(cleanMyId, dbMe);
+    const myIdsLower = new Set(myIdsList.map((s) => s.toLowerCase()));
+
+    const msgSenderId = String(msg.senderId || '').toLowerCase();
+    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
+    const msgTargetId = String(msg.targetUserId || '').toLowerCase();
+    const msgTargetHandle = String(msg.targetUserHandle || '').toLowerCase().replace(/^@/, '');
+
+    const isParticipant =
+      myIdsLower.has(msgSenderId) ||
+      (msgSenderHandle && myIdsLower.has(msgSenderHandle)) ||
+      myIdsLower.has(msgTargetId) ||
+      (msgTargetHandle && myIdsLower.has(msgTargetHandle));
+
+    if (!isParticipant) {
+      throw new Error('Forbidden: You are not part of this conversation');
+    }
+
+    await messageRepository.markDeletedForUser(messageId, myIdsList);
+
+    const payload = {
+      messageId,
+      userId: dbMe ? String(dbMe._id) : cleanMyId,
+      senderId: msg.senderId,
+      targetUserId: msg.targetUserId,
+    };
+
+    this.emitToUserIdentities(cleanMyId, dbMe, 'direct:message-deleted-for-me', payload, senderSocketId);
+
+    return { success: true, messageId };
+  }
+
+  /**
+   * Delete conversation between user and partner ('me' = your side only, 'both' = both sides)
+   */
+  async deleteConversation(
+    myId: string,
+    partnerId: string,
+    scope: 'me' | 'both' = 'both',
+    senderSocketId?: string
+  ): Promise<{ success: boolean; deletedCount: number; scope: 'me' | 'both' }> {
     const cleanMyId = String(myId).trim();
     const cleanPartnerId = String(partnerId).trim();
+    const normalizedScope: 'me' | 'both' = scope === 'me' ? 'me' : 'both';
 
     const [dbMe, dbPartner] = await Promise.all([
       this.resolveUser(cleanMyId),
@@ -555,17 +721,67 @@ export class MessageService {
     ]);
 
     const canonicalMyId = dbMe ? String(dbMe._id) : cleanMyId;
-    const partnerCanonicalIds = [cleanPartnerId];
-    if (dbPartner) {
-      partnerCanonicalIds.push(String(dbPartner._id));
-      if (dbPartner.mitraId) partnerCanonicalIds.push(dbPartner.mitraId);
-      if (dbPartner.handle) partnerCanonicalIds.push(dbPartner.handle);
+    const canonicalPartnerId = dbPartner ? String(dbPartner._id) : cleanPartnerId;
+
+    const myIdsList = this.getCanonicalIdsForUser(cleanMyId, dbMe);
+    const partnerIdsList = this.getCanonicalIdsForUser(cleanPartnerId, dbPartner);
+
+    const keysSet = new Set<string>();
+    for (const m of myIdsList) {
+      for (const p of partnerIdsList) {
+        keysSet.add(buildConversationKey(m, p));
+      }
     }
 
-    const keys = partnerCanonicalIds.map((pid) => buildConversationKey(canonicalMyId, pid));
-    const deletedCount = await messageRepository.deleteConversation(keys, canonicalMyId, cleanPartnerId);
+    const deletedCount = await messageRepository.deleteConversation(
+      Array.from(keysSet),
+      myIdsList,
+      partnerIdsList,
+      normalizedScope
+    );
 
-    return { success: true, deletedCount };
+    if (normalizedScope === 'both') {
+      // Notify partner immediately so the chat vanishes from their screen & sidebar too
+      this.emitToUserIdentities(canonicalPartnerId, dbPartner, 'direct:chat-deleted', {
+        scope: 'both',
+        deletedBy: canonicalMyId,
+        partnerId: canonicalMyId,
+        partnerHandle: dbMe?.mitraId || dbMe?.handle || '',
+        targetUserId: canonicalPartnerId,
+      });
+
+      // Multi-tab sync for initiating user
+      this.emitToUserIdentities(
+        canonicalMyId,
+        dbMe,
+        'direct:chat-deleted',
+        {
+          scope: 'both',
+          deletedBy: canonicalMyId,
+          partnerId: canonicalPartnerId,
+          partnerHandle: dbPartner?.mitraId || dbPartner?.handle || '',
+          targetUserId: canonicalMyId,
+        },
+        senderSocketId
+      );
+    } else {
+      // Multi-tab sync for initiating user only
+      this.emitToUserIdentities(
+        canonicalMyId,
+        dbMe,
+        'direct:chat-deleted',
+        {
+          scope: 'me',
+          deletedBy: canonicalMyId,
+          partnerId: canonicalPartnerId,
+          partnerHandle: dbPartner?.mitraId || dbPartner?.handle || '',
+          targetUserId: canonicalMyId,
+        },
+        senderSocketId
+      );
+    }
+
+    return { success: true, deletedCount, scope: normalizedScope };
   }
 }
 

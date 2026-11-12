@@ -10,10 +10,18 @@ export class MessageRepository {
     return doc;
   }
 
-  async findMessages(query: any, limit = 30, before?: number): Promise<any[]> {
+  async findMessages(
+    query: any,
+    limit = 30,
+    before?: number,
+    excludeForIds?: string[]
+  ): Promise<any[]> {
     const filter = { ...query };
     if (before && !isNaN(before)) {
       filter.timestamp = { $lt: before };
+    }
+    if (Array.isArray(excludeForIds) && excludeForIds.length > 0) {
+      filter.deletedFor = { $nin: excludeForIds };
     }
 
     const docs = await DirectMessageModel.find(filter)
@@ -22,6 +30,33 @@ export class MessageRepository {
       .lean()
       .exec();
     return docs;
+  }
+
+  async findMessageById(messageId: string): Promise<any> {
+    return DirectMessageModel.findOne({ id: messageId }).lean().exec();
+  }
+
+  async updateMessageText(messageId: string, text: string, editedAt: number): Promise<any> {
+    return DirectMessageModel.findOneAndUpdate(
+      { id: messageId },
+      { $set: { text, isEdited: true, editedAt } },
+      { new: true }
+    )
+      .lean()
+      .exec();
+  }
+
+  async deleteMessageById(messageId: string): Promise<number> {
+    const res = await DirectMessageModel.deleteOne({ id: messageId }).exec();
+    return res.deletedCount || 0;
+  }
+
+  async markDeletedForUser(messageId: string, userIds: string[]): Promise<number> {
+    const res = await DirectMessageModel.updateOne(
+      { id: messageId },
+      { $addToSet: { deletedFor: { $each: userIds } } }
+    ).exec();
+    return res.modifiedCount || 0;
   }
 
   async updateManyStatus(filter: any, status: MessageStatus): Promise<number> {
@@ -34,7 +69,10 @@ export class MessageRepository {
     return DirectMessageModel.aggregate([
       {
         $match: {
-          $or: [{ senderId: { $in: ids } }, { targetUserId: { $in: ids } }],
+          $and: [
+            { $or: [{ senderId: { $in: ids } }, { targetUserId: { $in: ids } }] },
+            { deletedFor: { $nin: ids } },
+          ],
         },
       },
       {
@@ -80,18 +118,38 @@ export class MessageRepository {
     ]);
   }
 
-  async deleteConversation(keys: string[], userA: string, userB: string): Promise<number> {
-    const res = await DirectMessageModel.deleteMany({
+  async deleteConversation(
+    keys: string[],
+    myIds: string[],
+    partnerIds: string[],
+    scope: 'me' | 'both' = 'both'
+  ): Promise<number> {
+    const filter = {
       $or: [
         { conversationKey: { $in: keys } },
         {
           $and: [
-            { senderId: { $in: [userA, userB] } },
-            { targetUserId: { $in: [userA, userB] } },
+            { senderId: { $in: myIds } },
+            { targetUserId: { $in: partnerIds } },
+          ],
+        },
+        {
+          $and: [
+            { senderId: { $in: partnerIds } },
+            { targetUserId: { $in: myIds } },
           ],
         },
       ],
-    }).exec();
+    };
+
+    if (scope === 'me') {
+      const res = await DirectMessageModel.updateMany(filter, {
+        $addToSet: { deletedFor: { $each: myIds } },
+      }).exec();
+      return res.modifiedCount || 0;
+    }
+
+    const res = await DirectMessageModel.deleteMany(filter).exec();
     return res.deletedCount || 0;
   }
 }

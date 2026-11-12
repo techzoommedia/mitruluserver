@@ -9,11 +9,15 @@ export class GroupMessageRepository {
   async findMessagesByGroup(
     groupId: string,
     limit = 50,
-    beforeTimestamp?: number
+    beforeTimestamp?: number,
+    excludeForIds?: string[]
   ): Promise<IGroupMessage[]> {
     const query: any = { groupId };
     if (beforeTimestamp) {
       query.timestamp = { $lt: beforeTimestamp };
+    }
+    if (Array.isArray(excludeForIds) && excludeForIds.length > 0) {
+      query.deletedFor = { $nin: excludeForIds };
     }
 
     const messages = await GroupMessageModel.find(query)
@@ -22,6 +26,33 @@ export class GroupMessageRepository {
       .lean();
 
     return (messages as unknown as IGroupMessage[]).reverse();
+  }
+
+  async findMessageById(messageId: string): Promise<any> {
+    return GroupMessageModel.findOne({ id: messageId }).lean().exec();
+  }
+
+  async updateMessageText(messageId: string, text: string, editedAt: number): Promise<any> {
+    return GroupMessageModel.findOneAndUpdate(
+      { id: messageId },
+      { $set: { text, isEdited: true, editedAt } },
+      { new: true }
+    )
+      .lean()
+      .exec();
+  }
+
+  async deleteMessageById(messageId: string): Promise<number> {
+    const res = await GroupMessageModel.deleteOne({ id: messageId }).exec();
+    return res.deletedCount || 0;
+  }
+
+  async markDeletedForUser(messageId: string, userIds: string[]): Promise<number> {
+    const res = await GroupMessageModel.updateOne(
+      { id: messageId },
+      { $addToSet: { deletedFor: { $each: userIds } } }
+    ).exec();
+    return res.modifiedCount || 0;
   }
 
   async getLatestMessage(groupId: string): Promise<IGroupMessage | null> {

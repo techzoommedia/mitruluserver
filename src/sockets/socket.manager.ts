@@ -484,6 +484,67 @@ export class SocketManager {
         }
       });
 
+      // ── Event: Edit Direct Message ───────────────────────────────
+      socket.on('direct:edit_message', async (data: { messageId: string; text: string; senderId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.senderId;
+          if (!uid || !data?.messageId || !data?.text?.trim()) {
+            return callback?.({ success: false, error: 'messageId and text are required' });
+          }
+          const updated = await messageService.editMessage(String(uid), String(data.messageId), String(data.text), socket.id);
+          callback?.({ success: true, message: updated });
+        } catch (err: any) {
+          console.error('[Socket direct:edit_message error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to edit message' });
+        }
+      });
+
+      // ── Event: Unsend Direct Message (both sides) ────────────────
+      socket.on('direct:unsend_message', async (data: { messageId: string; senderId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.senderId;
+          if (!uid || !data?.messageId) {
+            return callback?.({ success: false, error: 'messageId is required' });
+          }
+          const result = await messageService.unsendMessage(String(uid), String(data.messageId), socket.id);
+          callback?.(result);
+        } catch (err: any) {
+          console.error('[Socket direct:unsend_message error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to unsend message' });
+        }
+      });
+
+      // ── Event: Delete Direct Message for Me ──────────────────────
+      socket.on('direct:delete_for_me', async (data: { messageId: string; userId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.userId;
+          if (!uid || !data?.messageId) {
+            return callback?.({ success: false, error: 'messageId is required' });
+          }
+          const result = await messageService.deleteMessageForMe(String(uid), String(data.messageId), socket.id);
+          callback?.(result);
+        } catch (err: any) {
+          console.error('[Socket direct:delete_for_me error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to delete message for me' });
+        }
+      });
+
+      // ── Event: Delete Conversation ('me' | 'both') ───────────────
+      socket.on('direct:delete_chat', async (data: { partnerId: string; scope?: 'me' | 'both'; userId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.userId;
+          if (!uid || !data?.partnerId) {
+            return callback?.({ success: false, error: 'partnerId is required' });
+          }
+          const scope = data.scope === 'me' ? 'me' : 'both';
+          const result = await messageService.deleteConversation(String(uid), String(data.partnerId), scope, socket.id);
+          callback?.(result);
+        } catch (err: any) {
+          console.error('[Socket direct:delete_chat error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to delete conversation' });
+        }
+      });
+
       // ── Event: Group Messaging (Public Community Groups e.g. Telugu) ──
       socket.on('group:join', (data: { groupId?: string }) => {
         const gid = data?.groupId || 'telugu';
@@ -526,6 +587,48 @@ export class SocketManager {
         } catch (err: any) {
           console.error('[Socket group:message error]:', err);
           callback?.({ success: false, error: err.message || 'Failed to send group message' });
+        }
+      });
+
+      socket.on('group:edit_message', async (data: { messageId: string; text: string; senderId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.senderId;
+          if (!uid || !data?.messageId || !data?.text?.trim()) {
+            return callback?.({ success: false, error: 'messageId and text are required' });
+          }
+          const updated = await groupMessageService.editGroupMessage(String(uid), String(data.messageId), String(data.text));
+          callback?.({ success: true, message: updated });
+        } catch (err: any) {
+          console.error('[Socket group:edit_message error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to edit group message' });
+        }
+      });
+
+      socket.on('group:unsend_message', async (data: { messageId: string; userId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.userId;
+          if (!uid || !data?.messageId) {
+            return callback?.({ success: false, error: 'messageId is required' });
+          }
+          const result = await groupMessageService.unsendGroupMessage(String(uid), String(data.messageId));
+          callback?.(result);
+        } catch (err: any) {
+          console.error('[Socket group:unsend_message error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to unsend group message' });
+        }
+      });
+
+      socket.on('group:delete_for_me', async (data: { messageId: string; userId?: string }, callback?: Function) => {
+        try {
+          const uid = socket.data.userId || data?.userId;
+          if (!uid || !data?.messageId) {
+            return callback?.({ success: false, error: 'messageId is required' });
+          }
+          const result = await groupMessageService.deleteGroupMessageForMe(String(uid), String(data.messageId));
+          callback?.(result);
+        } catch (err: any) {
+          console.error('[Socket group:delete_for_me error]:', err);
+          callback?.({ success: false, error: err.message || 'Failed to delete group message for me' });
         }
       });
 

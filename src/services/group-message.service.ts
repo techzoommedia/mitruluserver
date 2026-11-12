@@ -1,6 +1,7 @@
 import { groupMessageRepository } from '../repositories/group-message.repository';
 import { IGroupMessage, GroupMediaType } from '../models/group-message.model';
 import { socketManager } from '../sockets/socket.manager';
+import { messageService } from './message.service';
 
 export interface GroupItem {
   id: string;
@@ -68,9 +69,15 @@ export class GroupMessageService {
   async getMessages(
     groupId: string,
     limit = 50,
-    before?: number
+    before?: number,
+    viewerUserId?: string
   ): Promise<IGroupMessage[]> {
-    return await groupMessageRepository.findMessagesByGroup(groupId, limit, before);
+    let excludeForIds: string[] | undefined;
+    if (viewerUserId) {
+      const dbUser = await messageService.resolveUser(String(viewerUserId).trim());
+      excludeForIds = messageService.getCanonicalIdsForUser(String(viewerUserId).trim(), dbUser);
+    }
+    return await groupMessageRepository.findMessagesByGroup(groupId, limit, before, excludeForIds);
   }
 
   /**
@@ -115,6 +122,132 @@ export class GroupMessageService {
     }
 
     return created;
+  }
+
+  /**
+   * Edit a sent group message (sender only)
+   */
+  async editGroupMessage(
+    myId: string,
+    messageId: string,
+    newText: string
+  ): Promise<any> {
+    const trimmed = String(newText || '').trim();
+    if (!trimmed) {
+      throw new Error('Updated message text is required');
+    }
+
+    const msg = await groupMessageRepository.findMessageById(messageId);
+    if (!msg) {
+      throw new Error('Message not found');
+    }
+
+    const dbMe = await messageService.resolveUser(String(myId).trim());
+    const myIdsLower = new Set(
+      messageService.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase())
+    );
+
+    const msgSenderId = String(msg.senderId || '').toLowerCase();
+    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
+    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
+    if (!isSender) {
+      throw new Error('Forbidden: Only the sender can edit this message');
+    }
+
+    const editedAt = Date.now();
+    const updated = await groupMessageRepository.updateMessageText(messageId, trimmed, editedAt);
+    const gid = (msg.groupId || 'telugu').toLowerCase();
+    const room = `group_${gid}`;
+
+    try {
+      socketManager.getIO().to(room).emit('group:message-edited', {
+        groupId: gid,
+        messageId,
+        text: trimmed,
+        isEdited: true,
+        editedAt,
+        message: updated || { ...msg, text: trimmed, isEdited: true, editedAt },
+      });
+    } catch (err) {
+      console.warn('[GroupMessageService] Socket edit broadcast error:', err);
+    }
+
+    return updated;
+  }
+
+  /**
+   * Unsend a group message for everyone (sender only)
+   */
+  async unsendGroupMessage(
+    myId: string,
+    messageId: string
+  ): Promise<{ success: boolean; messageId: string; deletedCount: number }> {
+    const msg = await groupMessageRepository.findMessageById(messageId);
+    if (!msg) {
+      return { success: true, messageId, deletedCount: 0 };
+    }
+
+    const dbMe = await messageService.resolveUser(String(myId).trim());
+    const myIdsLower = new Set(
+      messageService.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase())
+    );
+
+    const msgSenderId = String(msg.senderId || '').toLowerCase();
+    const msgSenderHandle = String(msg.senderHandle || '').toLowerCase().replace(/^@/, '');
+    const isSender = myIdsLower.has(msgSenderId) || (msgSenderHandle && myIdsLower.has(msgSenderHandle));
+    if (!isSender) {
+      throw new Error('Forbidden: Only the sender can unsend this message');
+    }
+
+    const deletedCount = await groupMessageRepository.deleteMessageById(messageId);
+    const gid = (msg.groupId || 'telugu').toLowerCase();
+    const room = `group_${gid}`;
+
+    try {
+      socketManager.getIO().to(room).emit('group:message-unsent', {
+        groupId: gid,
+        messageId,
+      });
+    } catch (err) {
+      console.warn('[GroupMessageService] Socket unsend broadcast error:', err);
+    }
+
+    return { success: true, messageId, deletedCount };
+  }
+
+  /**
+   * Delete a group message only from the current user's side
+   */
+  async deleteGroupMessageForMe(
+    myId: string,
+    messageId: string
+  ): Promise<{ success: boolean; messageId: string }> {
+    const msg = await groupMessageRepository.findMessageById(messageId);
+    if (!msg) {
+      return { success: true, messageId };
+    }
+
+    const cleanMyId = String(myId).trim();
+    const dbMe = await messageService.resolveUser(cleanMyId);
+    const myIdsList = messageService.getCanonicalIdsForUser(cleanMyId, dbMe);
+
+    await groupMessageRepository.markDeletedForUser(messageId, myIdsList);
+
+    const gid = (msg.groupId || 'telugu').toLowerCase();
+    try {
+      socketManager.emitToUser(cleanMyId, 'group:message-deleted-for-me', {
+        groupId: gid,
+        messageId,
+      });
+      if (dbMe?._id) {
+        socketManager.emitToUser(String(dbMe._id), 'group:message-deleted-for-me', {
+          groupId: gid,
+          messageId,
+        });
+      }
+    } catch {}
+
+    return { success: true, messageId };
   }
 }
 

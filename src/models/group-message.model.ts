@@ -14,6 +14,9 @@ export interface IGroupMessage extends Document {
   mediaUrl?: string;
   mediaType?: GroupMediaType;
   timestamp: number;
+  deletedFor?: string[];
+  isEdited?: boolean;
+  editedAt?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +34,9 @@ export const GroupMessageSchema = new Schema<IGroupMessage>(
     mediaUrl: { type: String, default: '' },
     mediaType: { type: String, enum: ['image', 'video', 'audio', 'file'] },
     timestamp: { type: Number, required: true, index: true },
+    deletedFor: { type: [String], default: [], index: true },
+    isEdited: { type: Boolean, default: false },
+    editedAt: { type: Number },
   },
   {
     collection: 'group_messages',
