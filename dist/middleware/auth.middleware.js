@@ -10,7 +10,13 @@ const env_1 = require("../config/env");
 function optionalAuth(req, res, next) {
     try {
         const authHeader = req.headers.authorization;
-        const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        let token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        if (!token && req.headers.cookie) {
+            const match = req.headers.cookie.match(/(?:^|;\s*)mitrulu_token=([^;]+)/);
+            if (match) {
+                token = decodeURIComponent(match[1]);
+            }
+        }
         if (token) {
             try {
                 const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
@@ -33,7 +39,13 @@ function optionalAuth(req, res, next) {
 function requireAuth(req, res, next) {
     try {
         const authHeader = req.headers.authorization;
-        const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        let token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+        if (!token && req.headers.cookie) {
+            const match = req.headers.cookie.match(/(?:^|;\s*)mitrulu_token=([^;]+)/);
+            if (match) {
+                token = decodeURIComponent(match[1]);
+            }
+        }
         if (token) {
             try {
                 const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });

@@ -10,7 +10,14 @@ export interface AuthenticatedRequest extends Request {
 export function optionalAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   try {
     const authHeader = req.headers.authorization;
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    let token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+
+    if (!token && req.headers.cookie) {
+      const match = req.headers.cookie.match(/(?:^|;\s*)mitrulu_token=([^;]+)/);
+      if (match) {
+        token = decodeURIComponent(match[1]);
+      }
+    }
 
     if (token) {
       try {
@@ -35,7 +42,14 @@ export function optionalAuth(req: AuthenticatedRequest, res: Response, next: Nex
 export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   try {
     const authHeader = req.headers.authorization;
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+    let token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+
+    if (!token && req.headers.cookie) {
+      const match = req.headers.cookie.match(/(?:^|;\s*)mitrulu_token=([^;]+)/);
+      if (match) {
+        token = decodeURIComponent(match[1]);
+      }
+    }
 
     if (token) {
       try {
