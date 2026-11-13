@@ -426,6 +426,21 @@ export class PostController {
     }
   }
 
+  async getSeen(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const currentUserId = req.userId;
+      if (!currentUserId) {
+        res.json({ success: true, seenPostIds: [] });
+        return;
+      }
+      const dbUser: any = await UserModel.findById(currentUserId).select('seenPostIds').lean();
+      const seenPostIds = Array.isArray(dbUser?.seenPostIds) ? dbUser.seenPostIds : [];
+      res.json({ success: true, seenPostIds });
+    } catch {
+      res.json({ success: true, seenPostIds: [] });
+    }
+  }
+
   async markSeen(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const currentUserId = req.userId;

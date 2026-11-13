@@ -379,6 +379,21 @@ class PostController {
             res.status(500).json({ error: err.message });
         }
     }
+    async getSeen(req, res) {
+        try {
+            const currentUserId = req.userId;
+            if (!currentUserId) {
+                res.json({ success: true, seenPostIds: [] });
+                return;
+            }
+            const dbUser = await user_model_1.default.findById(currentUserId).select('seenPostIds').lean();
+            const seenPostIds = Array.isArray(dbUser?.seenPostIds) ? dbUser.seenPostIds : [];
+            res.json({ success: true, seenPostIds });
+        }
+        catch {
+            res.json({ success: true, seenPostIds: [] });
+        }
+    }
     async markSeen(req, res) {
         try {
             const currentUserId = req.userId;

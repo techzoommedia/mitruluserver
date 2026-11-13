@@ -15,6 +15,9 @@ router.get(['/api/clips', '/api/clips/', '/clips', '/clips/'], optionalAuth, (re
 router.post(['/api/posts', '/api/posts/', '/posts', '/posts/'], requireAuth, (req, res) =>
   postController.createPost(req, res)
 );
+router.get(['/api/posts/seen', '/api/posts/seen/', '/posts/seen', '/posts/seen/'], optionalAuth, (req, res) =>
+  postController.getSeen(req, res)
+);
 router.post(['/api/posts/seen', '/api/posts/seen/', '/posts/seen', '/posts/seen/'], requireAuth, (req, res) =>
   postController.markSeen(req, res)
 );

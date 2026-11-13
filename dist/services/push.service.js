@@ -183,7 +183,9 @@ async function sendPushToUser(targetUserId, payload) {
                 },
             },
         };
+        console.log(`[PushService] Dispatching ${stringData.type || 'notification'} push (action=${stringData.action || 'none'}, isCall=${isCallPush}) to user ${user._id} (${tokensList.length} token(s)): "${payload.title}"`);
         const response = await messaging.sendEachForMulticast(multicastMessage);
+        console.log(`[PushService] Multicast result for user ${user._id}: ${response.successCount} succeeded, ${response.failureCount} failed`);
         if (response.failureCount > 0) {
             const invalidTokens = [];
             response.responses.forEach((resp, idx) => {
