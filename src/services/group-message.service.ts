@@ -1,7 +1,9 @@
 import { groupMessageRepository } from '../repositories/group-message.repository';
-import { IGroupMessage, GroupMediaType } from '../models/group-message.model';
+import { IGroupMessage, GroupMediaType, GroupMessageModel } from '../models/group-message.model';
 import { socketManager } from '../sockets/socket.manager';
 import { messageService } from './message.service';
+import { UserModel } from '../models/user.model';
+import { ChatGroupModel, IChatGroup } from '../models/chat-group.model';
 
 export interface GroupItem {
   id: string;
@@ -12,6 +14,11 @@ export interface GroupItem {
   isPublic: boolean;
   category: string;
   memberCount: number;
+  isHold?: boolean;
+  holdReason?: string;
+  heldAt?: string | null;
+  heldBy?: string;
+  rules?: string;
   lastMessage?: {
     text: string;
     senderName: string;
@@ -35,32 +42,75 @@ export interface SendGroupMessageDTO {
 
 export class GroupMessageService {
   /**
-   * List all available groups with real-time last message
+   * Seed default Telugu community group if not already in database
+   */
+  async ensureDefaultGroupSeeded(): Promise<void> {
+    try {
+      const existing = await ChatGroupModel.findOne({ id: 'telugu' }).lean();
+      if (!existing) {
+        await ChatGroupModel.create({
+          id: 'telugu',
+          name: 'Telugu',
+          teluguName: 'మన తెలుగు',
+          description: 'మన తెలుగు ప్రజల పబ్లిక్ గ్రూప్ • ఇక్కడ అందరూ కలిసి సరదాగా చాట్ చేసుకోవచ్చు',
+          avatar: '/mitrulu-logo.webp',
+          category: 'Community',
+          isPublic: true,
+          isHold: false,
+          rules: 'గౌరవంగా మాట్లాడండి, స్పామ్ చేయకండి (Be respectful, no spam)',
+        });
+      }
+    } catch (err) {
+      console.warn('[GroupMessageService] Error seeding default group:', err);
+    }
+  }
+
+  /**
+   * List all available groups with real-time last message and accurate member counts
    */
   async getGroups(): Promise<GroupItem[]> {
-    // Default public Telugu group
-    const latestTeluguMsg = await groupMessageRepository.getLatestMessage('telugu');
-    const teluguMsgCount = await groupMessageRepository.countMessages('telugu');
+    await this.ensureDefaultGroupSeeded();
 
-    const teluguGroup: GroupItem = {
-      id: 'telugu',
-      name: 'Telugu',
-      teluguName: 'మన తెలుగు',
-      description: 'మన తెలుగు ప్రజల పబ్లిక్ గ్రూప్ • ఇక్కడ అందరూ కలిసి సరదాగా చాట్ చేసుకోవచ్చు',
-      avatar: '/mitrulu-logo.webp',
-      isPublic: true,
-      category: 'Community',
-      memberCount: Math.max(120, socketManager.getActiveSocketsCount() + 85),
-      lastMessage: latestTeluguMsg
-        ? {
-            text: latestTeluguMsg.text,
-            senderName: latestTeluguMsg.senderName,
-            timestamp: latestTeluguMsg.timestamp,
-          }
-        : undefined,
-    };
+    const dbGroups = await ChatGroupModel.find({}).sort({ createdAt: 1 }).lean();
+    const totalUsers = await UserModel.countDocuments().catch(() => 0);
 
-    return [teluguGroup];
+    const groups: GroupItem[] = await Promise.all(
+      dbGroups.map(async (grp) => {
+        const latestMsg = await groupMessageRepository.getLatestMessage(grp.id);
+        let memberCount = 1;
+        if (grp.isPublic) {
+          memberCount = Math.max(totalUsers, grp.customMemberCount || 1);
+        } else {
+          const uniqueSenders = await GroupMessageModel.distinct('senderId', { groupId: grp.id });
+          memberCount = Math.max(uniqueSenders.length, grp.customMemberCount || 1);
+        }
+
+        return {
+          id: grp.id,
+          name: grp.name,
+          teluguName: grp.teluguName,
+          description: grp.description,
+          avatar: grp.avatar || '/mitrulu-logo.webp',
+          isPublic: grp.isPublic,
+          category: grp.category,
+          isHold: Boolean(grp.isHold),
+          holdReason: grp.holdReason,
+          heldAt: grp.heldAt ? new Date(grp.heldAt).toISOString() : null,
+          heldBy: grp.heldBy,
+          rules: grp.rules,
+          memberCount,
+          lastMessage: latestMsg
+            ? {
+                text: latestMsg.text,
+                senderName: latestMsg.senderName,
+                timestamp: latestMsg.timestamp,
+              }
+            : undefined,
+        };
+      })
+    );
+
+    return groups;
   }
 
   /**
@@ -84,12 +134,25 @@ export class GroupMessageService {
    * Send a new message to a group and broadcast to all members in real time
    */
   async sendGroupMessage(dto: SendGroupMessageDTO, exceptSocketId?: string): Promise<IGroupMessage> {
+    const targetGroupId = (dto.groupId || 'telugu').toLowerCase().trim();
+
+    // Prevent sending messages to groups that are temporarily on hold
+    const grp = await ChatGroupModel.findOne({ id: targetGroupId }).lean();
+    if (grp && grp.isHold) {
+      const holdErr: any = new Error(
+        grp.holdReason || 'ఈ గ్రూప్ ప్రస్తుతం అడ్మినిస్ట్రేటర్ ద్వారా తాత్కాలికంగా హోల్డ్‌లో ఉంచబడింది (This group is temporarily on hold)'
+      );
+      holdErr.isHold = true;
+      holdErr.statusCode = 403;
+      throw holdErr;
+    }
+
     const messageId = dto.id || `gmsg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     const timestamp = dto.timestamp || Date.now();
 
     const created = await groupMessageRepository.createMessage({
       id: messageId,
-      groupId: dto.groupId || 'telugu',
+      groupId: targetGroupId,
       senderId: dto.senderId,
       senderName: dto.senderName || 'Mitrulu Member',
       senderAvatar: dto.senderAvatar || '',
@@ -250,6 +313,178 @@ export class GroupMessageService {
     } catch {}
 
     return { success: true, messageId };
+  }
+
+  /**
+   * Admin: List all groups with detailed analytics
+   */
+  async getAllGroupsAdmin(): Promise<any[]> {
+    await this.ensureDefaultGroupSeeded();
+    const dbGroups = await ChatGroupModel.find({}).sort({ createdAt: -1 }).lean();
+    const totalUsers = await UserModel.countDocuments().catch(() => 0);
+
+    return await Promise.all(
+      dbGroups.map(async (grp) => {
+        const [totalMessages, latestMsg, uniqueParticipants] = await Promise.all([
+          groupMessageRepository.countMessages(grp.id),
+          groupMessageRepository.getLatestMessage(grp.id),
+          GroupMessageModel.distinct('senderId', { groupId: grp.id }),
+        ]);
+
+        const memberCount = grp.isPublic
+          ? Math.max(totalUsers, grp.customMemberCount || 1)
+          : Math.max(uniqueParticipants.length, grp.customMemberCount || 1);
+
+        return {
+          ...grp,
+          totalMessages,
+          uniqueParticipantsCount: uniqueParticipants.length,
+          memberCount,
+          calculatedMemberCount: memberCount,
+          lastActiveAt: latestMsg ? new Date(latestMsg.timestamp).toISOString() : grp.updatedAt,
+        };
+      })
+    );
+  }
+
+  /**
+   * Admin: Create a new chat group
+   */
+  async createGroup(data: {
+    id: string;
+    name: string;
+    teluguName: string;
+    description?: string;
+    avatar?: string;
+    category?: string;
+    isPublic?: boolean;
+    rules?: string;
+    customMemberCount?: number;
+  }): Promise<IChatGroup> {
+    const slug = data.id.toLowerCase().trim().replace(/[^a-z0-9_-]/g, '-');
+    if (!slug) {
+      throw new Error('Valid group slug ID is required (e.g. cinema, hyderabad)');
+    }
+
+    const existing = await ChatGroupModel.findOne({ id: slug });
+    if (existing) {
+      throw new Error(`Group with ID "${slug}" already exists`);
+    }
+
+    const newGroup = await ChatGroupModel.create({
+      id: slug,
+      name: data.name.trim(),
+      teluguName: data.teluguName.trim(),
+      description: data.description?.trim() || '',
+      avatar: data.avatar?.trim() || '/mitrulu-logo.webp',
+      category: data.category?.trim() || 'Community',
+      isPublic: data.isPublic !== false,
+      rules: data.rules?.trim() || '',
+      customMemberCount: data.customMemberCount || 0,
+      isHold: false,
+    });
+
+    try {
+      socketManager.getIO().emit('group:created', { group: newGroup.toObject() });
+    } catch {}
+
+    return newGroup;
+  }
+
+  /**
+   * Admin: Update group details
+   */
+  async updateGroup(groupId: string, data: Partial<IChatGroup>): Promise<IChatGroup> {
+    const group = await ChatGroupModel.findOne({ id: groupId.toLowerCase().trim() });
+    if (!group) {
+      throw new Error(`Group "${groupId}" not found`);
+    }
+
+    if (data.name !== undefined) group.name = data.name.trim();
+    if (data.teluguName !== undefined) group.teluguName = data.teluguName.trim();
+    if (data.description !== undefined) group.description = data.description.trim();
+    if (data.avatar !== undefined) group.avatar = data.avatar.trim();
+    if (data.category !== undefined) group.category = data.category.trim();
+    if (data.isPublic !== undefined) group.isPublic = Boolean(data.isPublic);
+    if (data.rules !== undefined) group.rules = data.rules.trim();
+    if (data.customMemberCount !== undefined) group.customMemberCount = Number(data.customMemberCount);
+
+    await group.save();
+
+    try {
+      socketManager.getIO().emit('group:updated', { group: group.toObject() });
+    } catch {}
+
+    return group;
+  }
+
+  /**
+   * Admin: Toggle temporary hold / pause status on a group
+   */
+  async toggleGroupHold(groupId: string, isHold: boolean, holdReason?: string, adminActor?: string): Promise<IChatGroup> {
+    const group = await ChatGroupModel.findOne({ id: groupId.toLowerCase().trim() });
+    if (!group) {
+      throw new Error(`Group "${groupId}" not found`);
+    }
+
+    group.isHold = Boolean(isHold);
+    group.holdReason = isHold
+      ? (holdReason?.trim() || 'అడ్మిన్ ద్వారా తాత్కాలికంగా హోల్డ్‌లో ఉంచబడింది (Temporarily placed on hold by administrator)')
+      : '';
+    group.heldAt = isHold ? new Date() : null;
+    group.heldBy = isHold ? (adminActor || 'Admin') : '';
+
+    await group.save();
+
+    const room = `group_${group.id}`;
+    try {
+      socketManager.getIO().emit('group:hold-changed', {
+        groupId: group.id,
+        isHold: group.isHold,
+        holdReason: group.holdReason,
+      });
+      socketManager.getIO().to(room).emit('group:hold-changed', {
+        groupId: group.id,
+        isHold: group.isHold,
+        holdReason: group.holdReason,
+      });
+    } catch {}
+
+    return group;
+  }
+
+  /**
+   * Admin: Delete a group
+   */
+  async deleteGroup(groupId: string): Promise<void> {
+    const slug = groupId.toLowerCase().trim();
+    if (slug === 'telugu') {
+      throw new Error('Default public Telugu community group cannot be deleted');
+    }
+
+    const group = await ChatGroupModel.findOne({ id: slug });
+    if (!group) {
+      throw new Error(`Group "${slug}" not found`);
+    }
+
+    await ChatGroupModel.deleteOne({ id: slug });
+
+    try {
+      socketManager.getIO().emit('group:deleted', { groupId: slug });
+    } catch {}
+  }
+
+  /**
+   * Admin: Clear all messages in a group
+   */
+  async clearGroupMessages(groupId: string): Promise<number> {
+    const slug = groupId.toLowerCase().trim();
+    const result = await GroupMessageModel.deleteMany({ groupId: slug });
+    const room = `group_${slug}`;
+    try {
+      socketManager.getIO().to(room).emit('group:messages-cleared', { groupId: slug });
+    } catch {}
+    return result.deletedCount || 0;
   }
 }
 

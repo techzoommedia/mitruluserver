@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { adminController } from '../controllers/admin.controller';
+import { adminGroupController } from '../controllers/admin-group.controller';
 import { optionalAuth } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -71,6 +72,32 @@ router.get(['/api/admin/logs', '/api/admin/logs/', '/admin/logs', '/admin/logs/'
 );
 router.post(['/api/admin/logs', '/api/admin/logs/', '/admin/logs', '/admin/logs/'], optionalAuth, (req, res) =>
   adminController.actionLogs(req, res)
+);
+
+// ── Chat Groups Management ──────────────────────────────────────────────────
+router.get(['/api/admin/groups', '/api/admin/groups/', '/admin/groups', '/admin/groups/'], optionalAuth, (req, res) =>
+  adminGroupController.getGroups(req, res)
+);
+router.post(['/api/admin/groups', '/api/admin/groups/', '/admin/groups', '/admin/groups/'], optionalAuth, (req, res) =>
+  adminGroupController.createGroup(req, res)
+);
+router.patch(['/api/admin/groups/:groupId', '/api/admin/groups/:groupId/', '/admin/groups/:groupId', '/admin/groups/:groupId/'], optionalAuth, (req, res) =>
+  adminGroupController.updateGroup(req, res)
+);
+router.patch(['/api/admin/groups/:groupId/hold', '/api/admin/groups/:groupId/hold/', '/admin/groups/:groupId/hold', '/admin/groups/:groupId/hold/'], optionalAuth, (req, res) =>
+  adminGroupController.toggleHold(req, res)
+);
+router.delete(['/api/admin/groups/:groupId', '/api/admin/groups/:groupId/', '/admin/groups/:groupId', '/admin/groups/:groupId/'], optionalAuth, (req, res) =>
+  adminGroupController.deleteGroup(req, res)
+);
+router.get(['/api/admin/groups/:groupId/messages', '/api/admin/groups/:groupId/messages/', '/admin/groups/:groupId/messages', '/admin/groups/:groupId/messages/'], optionalAuth, (req, res) =>
+  adminGroupController.getGroupMessages(req, res)
+);
+router.delete(['/api/admin/groups/:groupId/messages', '/api/admin/groups/:groupId/messages/', '/admin/groups/:groupId/messages', '/admin/groups/:groupId/messages/'], optionalAuth, (req, res) =>
+  adminGroupController.clearMessages(req, res)
+);
+router.delete(['/api/admin/groups/:groupId/messages/:messageId', '/api/admin/groups/:groupId/messages/:messageId/', '/admin/groups/:groupId/messages/:messageId', '/admin/groups/:groupId/messages/:messageId/'], optionalAuth, (req, res) =>
+  adminGroupController.deleteSingleMessage(req, res)
 );
 
 export default router;

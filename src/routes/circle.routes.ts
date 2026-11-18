@@ -31,6 +31,9 @@ router.post(['/api/circle/community/room-actions', '/api/circle/community/room-a
 router.post(['/api/circle/active-status', '/api/circle/active-status/', '/circle/active-status', '/circle/active-status/'], (req, res) =>
   circleController.updateActiveStatus(req, res)
 );
+router.post(['/api/circle/call/token', '/api/circle/call/token/', '/circle/call/token', '/circle/call/token/'], (req, res) =>
+  circleController.getCallToken(req, res)
+);
 
 // Internal Next.js <-> Server notification routes
 router.post(['/api/internal/circle/sync-active', '/internal/circle/sync-active'], (req, res) =>

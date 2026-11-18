@@ -1,10 +1,13 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { JWT_SECRET } from '../config/env';
+import { JWT_SECRET, LIVEKIT_URL } from '../config/env';
 import { userService } from '../services/user.service';
 import { communityRoomService } from '../services/community-room.service';
 import { socketManager } from '../sockets/socket.manager';
 import { sendIncomingCallPush } from '../services/push.service';
+import { CommunityRoomModel } from '../models/community-room.model';
+import { callSessionRepository } from '../repositories/call-session.repository';
+import { liveKitService } from '../services/livekit.service';
 
 export class CircleController {
   async getActiveUsers(req: Request, res: Response): Promise<void> {
@@ -239,6 +242,119 @@ export class CircleController {
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || 'Failed to update active status' });
+    }
+  }
+
+  async getCallToken(req: Request, res: Response): Promise<void> {
+    try {
+      const token = req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : null;
+      let userId: string | undefined;
+      let userName = 'Mitrulu Member';
+
+      if (token) {
+        try {
+          const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+          userId = decoded.userId || decoded.id;
+          if (decoded.name) userName = decoded.name;
+        } catch {}
+      }
+
+      const { roomName, callId } = req.body;
+      if (!roomName && !callId) {
+        res.status(400).json({ error: 'roomName or callId is required' });
+        return;
+      }
+
+      if (!userId) {
+        userId = `anon_${Math.random().toString(36).slice(2, 9)}`;
+      } else {
+        const u = await userService.getUserById(userId).catch(() => null);
+        if (u?.name) userName = u.name;
+      }
+
+      const effectiveRoomName = roomName || callId;
+
+      // 1. Check if Community Room
+      const communityRoom = await CommunityRoomModel.findOne({
+        $or: [{ roomId: effectiveRoomName }, { name: effectiveRoomName }],
+      }).lean();
+
+      if (communityRoom) {
+        if (communityRoom.isStopped) {
+          res.status(403).json({
+            error: communityRoom.stoppedReason || 'This room is currently paused by admin.',
+            isStopped: true,
+          });
+          return;
+        }
+
+        const liveKitToken = await liveKitService.generateToken(userId, userName, communityRoom.roomId);
+        res.json({
+          success: true,
+          token: liveKitToken,
+          serverUrl: LIVEKIT_URL,
+          roomName: communityRoom.roomId,
+          isCommunity: true,
+          callType: communityRoom.type || 'audio',
+          room: communityRoom,
+        });
+        return;
+      }
+
+      // 2. Check 1:1 CallSession
+      const session = await callSessionRepository.findByCallOrRoom(callId, roomName);
+      if (session) {
+        if (session.status === 'ended') {
+          res.status(400).json({ error: 'This call has ended.', isEnded: true });
+          return;
+        }
+
+        const isCaller = session.callerId === userId;
+        const liveKitToken = await liveKitService.generateToken(userId, userName, session.roomName);
+
+        const targetUser = isCaller
+          ? {
+              id: session.targetUserId,
+              name: session.targetUserName,
+              teluguName: session.targetUserTeluguName,
+              avatar: session.targetUserAvatar,
+            }
+          : {
+              id: session.callerId,
+              name: session.callerName,
+              teluguName: session.callerTeluguName,
+              avatar: session.callerAvatar,
+            };
+
+        res.json({
+          success: true,
+          callId: session.callId,
+          roomName: session.roomName,
+          callType: session.callType,
+          isCaller,
+          targetUser,
+          token: liveKitToken,
+          serverUrl: LIVEKIT_URL,
+          isCommunity: false,
+        });
+        return;
+      }
+
+      // 3. Fallback: generate livekit token for generic room
+      const fallbackToken = await liveKitService.generateToken(userId, userName, effectiveRoomName);
+      res.json({
+        success: true,
+        token: fallbackToken,
+        serverUrl: LIVEKIT_URL,
+        roomName: effectiveRoomName,
+        callType: 'audio',
+        isCommunity: effectiveRoomName.includes('community') || effectiveRoomName.includes('room'),
+      });
+    } catch (err: any) {
+      console.error('[getCallToken error]:', err);
+      res.status(500).json({ error: err.message || 'Failed to generate call token' });
     }
   }
 }

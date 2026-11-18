@@ -10,6 +10,9 @@ const user_service_1 = require("../services/user.service");
 const community_room_service_1 = require("../services/community-room.service");
 const socket_manager_1 = require("../sockets/socket.manager");
 const push_service_1 = require("../services/push.service");
+const community_room_model_1 = require("../models/community-room.model");
+const call_session_repository_1 = require("../repositories/call-session.repository");
+const livekit_service_1 = require("../services/livekit.service");
 class CircleController {
     async getActiveUsers(req, res) {
         try {
@@ -234,6 +237,111 @@ class CircleController {
         }
         catch (error) {
             res.status(500).json({ error: error.message || 'Failed to update active status' });
+        }
+    }
+    async getCallToken(req, res) {
+        try {
+            const token = req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.slice(7)
+                : null;
+            let userId;
+            let userName = 'Mitrulu Member';
+            if (token) {
+                try {
+                    const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
+                    userId = decoded.userId || decoded.id;
+                    if (decoded.name)
+                        userName = decoded.name;
+                }
+                catch { }
+            }
+            const { roomName, callId } = req.body;
+            if (!roomName && !callId) {
+                res.status(400).json({ error: 'roomName or callId is required' });
+                return;
+            }
+            if (!userId) {
+                userId = `anon_${Math.random().toString(36).slice(2, 9)}`;
+            }
+            else {
+                const u = await user_service_1.userService.getUserById(userId).catch(() => null);
+                if (u?.name)
+                    userName = u.name;
+            }
+            const effectiveRoomName = roomName || callId;
+            // 1. Check if Community Room
+            const communityRoom = await community_room_model_1.CommunityRoomModel.findOne({
+                $or: [{ roomId: effectiveRoomName }, { name: effectiveRoomName }],
+            }).lean();
+            if (communityRoom) {
+                if (communityRoom.isStopped) {
+                    res.status(403).json({
+                        error: communityRoom.stoppedReason || 'This room is currently paused by admin.',
+                        isStopped: true,
+                    });
+                    return;
+                }
+                const liveKitToken = await livekit_service_1.liveKitService.generateToken(userId, userName, communityRoom.roomId);
+                res.json({
+                    success: true,
+                    token: liveKitToken,
+                    serverUrl: env_1.LIVEKIT_URL,
+                    roomName: communityRoom.roomId,
+                    isCommunity: true,
+                    callType: communityRoom.type || 'audio',
+                    room: communityRoom,
+                });
+                return;
+            }
+            // 2. Check 1:1 CallSession
+            const session = await call_session_repository_1.callSessionRepository.findByCallOrRoom(callId, roomName);
+            if (session) {
+                if (session.status === 'ended') {
+                    res.status(400).json({ error: 'This call has ended.', isEnded: true });
+                    return;
+                }
+                const isCaller = session.callerId === userId;
+                const liveKitToken = await livekit_service_1.liveKitService.generateToken(userId, userName, session.roomName);
+                const targetUser = isCaller
+                    ? {
+                        id: session.targetUserId,
+                        name: session.targetUserName,
+                        teluguName: session.targetUserTeluguName,
+                        avatar: session.targetUserAvatar,
+                    }
+                    : {
+                        id: session.callerId,
+                        name: session.callerName,
+                        teluguName: session.callerTeluguName,
+                        avatar: session.callerAvatar,
+                    };
+                res.json({
+                    success: true,
+                    callId: session.callId,
+                    roomName: session.roomName,
+                    callType: session.callType,
+                    isCaller,
+                    targetUser,
+                    token: liveKitToken,
+                    serverUrl: env_1.LIVEKIT_URL,
+                    isCommunity: false,
+                });
+                return;
+            }
+            // 3. Fallback: generate livekit token for generic room
+            const fallbackToken = await livekit_service_1.liveKitService.generateToken(userId, userName, effectiveRoomName);
+            res.json({
+                success: true,
+                token: fallbackToken,
+                serverUrl: env_1.LIVEKIT_URL,
+                roomName: effectiveRoomName,
+                callType: 'audio',
+                isCommunity: effectiveRoomName.includes('community') || effectiveRoomName.includes('room'),
+            });
+        }
+        catch (err) {
+            console.error('[getCallToken error]:', err);
+            res.status(500).json({ error: err.message || 'Failed to generate call token' });
         }
     }
 }
