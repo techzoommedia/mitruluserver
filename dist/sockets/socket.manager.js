@@ -327,8 +327,8 @@ class SocketManager {
             // ── Event: End Call ──────────────────────────────────────────
             socket.on('call:end', async (data, callback) => {
                 try {
-                    const { callId, roomName } = data;
-                    const session = await call_service_1.callService.endCall(callId, roomName);
+                    const { callId, roomName, durationSeconds } = data || {};
+                    const session = await call_service_1.callService.endCall(callId, roomName, durationSeconds);
                     if (session) {
                         this.emitToUser(session.callerId, 'call:ended', { callId: session.callId });
                         this.emitToUser(session.targetUserId, 'call:ended', { callId: session.callId });

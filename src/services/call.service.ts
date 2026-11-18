@@ -142,11 +142,19 @@ export class CallService {
     }
   }
 
-  async endCall(callId?: string, roomName?: string) {
+  async endCall(callId?: string, roomName?: string, durationSeconds?: number) {
     const session = await this.callRepo.findByCallOrRoom(callId, roomName);
     if (session && session.status !== 'ended') {
       session.status = 'ended';
       session.endedAt = new Date();
+      if (typeof durationSeconds === 'number' && durationSeconds >= 0) {
+        session.durationSeconds = durationSeconds;
+      } else if (session.createdAt) {
+        session.durationSeconds = Math.max(
+          0,
+          Math.floor((session.endedAt.getTime() - new Date(session.createdAt).getTime()) / 1000)
+        );
+      }
       await session.save();
     }
     return session;

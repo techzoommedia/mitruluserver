@@ -22,6 +22,32 @@ class CallSessionRepository {
     async updateStatus(callId, status, extra = {}) {
         return call_session_model_1.CallSessionModel.findOneAndUpdate({ callId }, { status, ...extra }, { new: true });
     }
+    async findRecentCalls(userId, targetUserId, limit = 10) {
+        const cappedLimit = Math.min(10, Math.max(1, limit || 10));
+        const userIds = [userId, String(userId)];
+        let query;
+        if (targetUserId) {
+            const targetIds = [targetUserId, String(targetUserId)];
+            query = {
+                $or: [
+                    { callerId: { $in: userIds }, targetUserId: { $in: targetIds } },
+                    { callerId: { $in: targetIds }, targetUserId: { $in: userIds } },
+                ],
+            };
+        }
+        else {
+            query = {
+                $or: [
+                    { callerId: { $in: userIds } },
+                    { targetUserId: { $in: userIds } },
+                ],
+            };
+        }
+        return call_session_model_1.CallSessionModel.find(query)
+            .sort({ createdAt: -1 })
+            .limit(cappedLimit)
+            .lean();
+    }
 }
 exports.CallSessionRepository = CallSessionRepository;
 exports.callSessionRepository = new CallSessionRepository();

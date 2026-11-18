@@ -7,6 +7,7 @@ import { socketManager } from '../sockets/socket.manager';
 import { sendIncomingCallPush } from '../services/push.service';
 import { CommunityRoomModel } from '../models/community-room.model';
 import { callSessionRepository } from '../repositories/call-session.repository';
+import { callService } from '../services/call.service';
 import { liveKitService } from '../services/livekit.service';
 
 export class CircleController {
@@ -355,6 +356,92 @@ export class CircleController {
     } catch (err: any) {
       console.error('[getCallToken error]:', err);
       res.status(500).json({ error: err.message || 'Failed to generate call token' });
+    }
+  }
+
+  async getCallHistory(req: Request, res: Response): Promise<void> {
+    try {
+      const token = req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : null;
+      let userId = (req.query.userId as string) || (req as any).user?.userId;
+      if (token) {
+        try {
+          const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+          userId = decoded.userId || decoded.id || userId;
+        } catch {}
+      }
+
+      if (!userId) {
+        res.json({ success: true, calls: [], count: 0 });
+        return;
+      }
+
+      const targetUserId = req.query.targetUserId as string | undefined;
+      const limit = Math.min(10, Math.max(1, parseInt(req.query.limit as string) || 10));
+
+      const rawCalls = await callSessionRepository.findRecentCalls(userId, targetUserId, limit);
+
+      const calls = rawCalls.map((c) => {
+        const isCaller = String(c.callerId) === String(userId);
+        const otherUser = isCaller
+          ? {
+              id: c.targetUserId,
+              name: c.targetUserName || 'User',
+              teluguName: c.targetUserTeluguName,
+              handle: '',
+              avatar: c.targetUserAvatar || '',
+            }
+          : {
+              id: c.callerId,
+              name: c.callerName || 'User',
+              teluguName: c.callerTeluguName,
+              handle: c.callerHandle || '',
+              avatar: c.callerAvatar || '',
+            };
+
+        let direction: 'outgoing' | 'incoming' | 'missed' = isCaller ? 'outgoing' : 'incoming';
+        if (!isCaller && (c.status === 'timeout' || c.status === 'declined')) {
+          direction = 'missed';
+        }
+
+        return {
+          id: c._id ? String(c._id) : c.callId,
+          callId: c.callId,
+          roomName: c.roomName,
+          callType: c.callType || 'audio',
+          status: c.status,
+          direction,
+          durationSeconds: c.durationSeconds || 0,
+          createdAt: c.createdAt,
+          endedAt: c.endedAt,
+          otherUser,
+        };
+      });
+
+      res.json({
+        success: true,
+        calls,
+        count: calls.length,
+      });
+    } catch (err: any) {
+      console.error('[getCallHistory error]:', err);
+      res.status(500).json({ success: false, error: err.message || 'Failed to fetch call history' });
+    }
+  }
+
+  async endCallHttp(req: Request, res: Response): Promise<void> {
+    try {
+      const { callId, roomName, durationSeconds } = req.body || {};
+      const session = await callService.endCall(callId, roomName, durationSeconds);
+      if (session) {
+        socketManager.emitToUser(session.callerId, 'call:ended', { callId: session.callId });
+        socketManager.emitToUser(session.targetUserId, 'call:ended', { callId: session.callId });
+      }
+      res.json({ success: true, session });
+    } catch (err: any) {
+      console.error('[endCallHttp error]:', err);
+      res.status(500).json({ success: false, error: err.message || 'Failed to end call' });
     }
   }
 }

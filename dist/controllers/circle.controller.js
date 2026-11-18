@@ -12,6 +12,7 @@ const socket_manager_1 = require("../sockets/socket.manager");
 const push_service_1 = require("../services/push.service");
 const community_room_model_1 = require("../models/community-room.model");
 const call_session_repository_1 = require("../repositories/call-session.repository");
+const call_service_1 = require("../services/call.service");
 const livekit_service_1 = require("../services/livekit.service");
 class CircleController {
     async getActiveUsers(req, res) {
@@ -342,6 +343,86 @@ class CircleController {
         catch (err) {
             console.error('[getCallToken error]:', err);
             res.status(500).json({ error: err.message || 'Failed to generate call token' });
+        }
+    }
+    async getCallHistory(req, res) {
+        try {
+            const token = req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.slice(7)
+                : null;
+            let userId = req.query.userId || req.user?.userId;
+            if (token) {
+                try {
+                    const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
+                    userId = decoded.userId || decoded.id || userId;
+                }
+                catch { }
+            }
+            if (!userId) {
+                res.json({ success: true, calls: [], count: 0 });
+                return;
+            }
+            const targetUserId = req.query.targetUserId;
+            const limit = Math.min(10, Math.max(1, parseInt(req.query.limit) || 10));
+            const rawCalls = await call_session_repository_1.callSessionRepository.findRecentCalls(userId, targetUserId, limit);
+            const calls = rawCalls.map((c) => {
+                const isCaller = String(c.callerId) === String(userId);
+                const otherUser = isCaller
+                    ? {
+                        id: c.targetUserId,
+                        name: c.targetUserName || 'User',
+                        teluguName: c.targetUserTeluguName,
+                        handle: '',
+                        avatar: c.targetUserAvatar || '',
+                    }
+                    : {
+                        id: c.callerId,
+                        name: c.callerName || 'User',
+                        teluguName: c.callerTeluguName,
+                        handle: c.callerHandle || '',
+                        avatar: c.callerAvatar || '',
+                    };
+                let direction = isCaller ? 'outgoing' : 'incoming';
+                if (!isCaller && (c.status === 'timeout' || c.status === 'declined')) {
+                    direction = 'missed';
+                }
+                return {
+                    id: c._id ? String(c._id) : c.callId,
+                    callId: c.callId,
+                    roomName: c.roomName,
+                    callType: c.callType || 'audio',
+                    status: c.status,
+                    direction,
+                    durationSeconds: c.durationSeconds || 0,
+                    createdAt: c.createdAt,
+                    endedAt: c.endedAt,
+                    otherUser,
+                };
+            });
+            res.json({
+                success: true,
+                calls,
+                count: calls.length,
+            });
+        }
+        catch (err) {
+            console.error('[getCallHistory error]:', err);
+            res.status(500).json({ success: false, error: err.message || 'Failed to fetch call history' });
+        }
+    }
+    async endCallHttp(req, res) {
+        try {
+            const { callId, roomName, durationSeconds } = req.body || {};
+            const session = await call_service_1.callService.endCall(callId, roomName, durationSeconds);
+            if (session) {
+                socket_manager_1.socketManager.emitToUser(session.callerId, 'call:ended', { callId: session.callId });
+                socket_manager_1.socketManager.emitToUser(session.targetUserId, 'call:ended', { callId: session.callId });
+            }
+            res.json({ success: true, session });
+        }
+        catch (err) {
+            console.error('[endCallHttp error]:', err);
+            res.status(500).json({ success: false, error: err.message || 'Failed to end call' });
         }
     }
 }

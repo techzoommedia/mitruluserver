@@ -20,6 +20,8 @@ router.get(['/api/circle/community/room-actions', '/api/circle/community/room-ac
 router.post(['/api/circle/community/room-actions', '/api/circle/community/room-actions/', '/circle/community/room-actions', '/circle/community/room-actions/'], (req, res) => circle_controller_1.circleController.postRoomActions(req, res));
 router.post(['/api/circle/active-status', '/api/circle/active-status/', '/circle/active-status', '/circle/active-status/'], (req, res) => circle_controller_1.circleController.updateActiveStatus(req, res));
 router.post(['/api/circle/call/token', '/api/circle/call/token/', '/circle/call/token', '/circle/call/token/'], (req, res) => circle_controller_1.circleController.getCallToken(req, res));
+router.get(['/api/circle/call/history', '/api/circle/call/history/', '/circle/call/history', '/circle/call/history/'], (req, res) => circle_controller_1.circleController.getCallHistory(req, res));
+router.post(['/api/circle/call/end', '/api/circle/call/end/', '/circle/call/end', '/circle/call/end/'], (req, res) => circle_controller_1.circleController.endCallHttp(req, res));
 // Internal Next.js <-> Server notification routes
 router.post(['/api/internal/circle/sync-active', '/internal/circle/sync-active'], (req, res) => circle_controller_1.circleController.syncActive(req, res));
 router.post(['/api/internal/circle/notify-incoming-call', '/internal/circle/notify-incoming-call'], (req, res) => circle_controller_1.circleController.notifyIncomingCall(req, res));
