@@ -449,12 +449,17 @@ class AdminController {
     }
     async getModerationQueue(req, res) {
         try {
-            const reports = await report_model_1.default.find({
+            const rawReports = await report_model_1.default.find({
                 status: { $in: ['pending', 'hidden_pending_review', 'escalated'] },
             })
                 .sort({ createdAt: -1 })
                 .limit(100)
                 .lean();
+            const reports = rawReports.map((r) => ({
+                ...r,
+                id: r._id ? r._id.toString() : (r.id || r.reportNumber),
+                _id: r._id ? r._id.toString() : (r.id || r.reportNumber),
+            }));
             res.json({ success: true, reports });
         }
         catch (error) {
@@ -463,7 +468,8 @@ class AdminController {
     }
     async resolveReport(req, res) {
         try {
-            const { reportId, action, targetType, targetId } = req.body;
+            const { action, targetType, targetId } = req.body;
+            const reportId = req.body.reportId || req.body.id || req.body._id;
             if (!reportId || !action) {
                 res.status(400).json({ error: 'reportId and action are required' });
                 return;
