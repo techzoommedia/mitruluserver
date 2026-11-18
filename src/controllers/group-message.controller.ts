@@ -42,6 +42,29 @@ export class GroupMessageController {
     }
   }
 
+  async getMembers(req: Request, res: Response): Promise<void> {
+    try {
+      const groupId = (req.params.groupId || (req.query.groupId as string) || 'telugu').toLowerCase();
+      const page = parseInt(req.query.page as string, 10) || 1;
+      const limit = parseInt(req.query.limit as string, 10) || 20;
+      const q = (req.query.q as string) || '';
+
+      const result = await groupMessageService.getGroupMembers(groupId, { page, limit, q });
+
+      res.status(200).json({
+        success: true,
+        groupId,
+        ...result,
+      });
+    } catch (err: any) {
+      console.error('[GroupMessageController getMembers error]:', err);
+      res.status(500).json({
+        success: false,
+        error: err.message || 'Failed to fetch group members',
+      });
+    }
+  }
+
   async sendMessage(req: Request, res: Response): Promise<void> {
     try {
       const groupId = (req.params.groupId || req.body.groupId || 'telugu').toLowerCase();

@@ -44,3 +44,4 @@ export const ChatGroupModel: Model<IChatGroup> =
   mongoose.models.ChatGroup || mongoose.model<IChatGroup>('ChatGroup', ChatGroupSchema);
 
 export default ChatGroupModel;
+

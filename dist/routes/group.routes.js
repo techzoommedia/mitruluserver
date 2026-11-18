@@ -4,6 +4,7 @@ const express_1 = require("express");
 const group_message_controller_1 = require("../controllers/group-message.controller");
 const router = (0, express_1.Router)();
 router.get(['/api/groups', '/api/groups/', '/groups', '/groups/'], (req, res) => group_message_controller_1.groupMessageController.getGroups(req, res));
+router.get(['/api/groups/:groupId/members', '/api/groups/:groupId/members/', '/groups/:groupId/members', '/groups/:groupId/members/'], (req, res) => group_message_controller_1.groupMessageController.getMembers(req, res));
 router.get(['/api/groups/:groupId/messages', '/api/groups/:groupId/messages/', '/groups/:groupId/messages', '/groups/:groupId/messages/'], (req, res) => group_message_controller_1.groupMessageController.getMessages(req, res));
 router.post(['/api/groups/:groupId/messages', '/api/groups/:groupId/messages/', '/groups/:groupId/messages', '/groups/:groupId/messages/'], (req, res) => group_message_controller_1.groupMessageController.sendMessage(req, res));
 router.patch(['/api/groups/:groupId/messages/:messageId', '/api/groups/:groupId/messages/:messageId/', '/groups/:groupId/messages/:messageId', '/groups/:groupId/messages/:messageId/'], (req, res) => group_message_controller_1.groupMessageController.editMessage(req, res));

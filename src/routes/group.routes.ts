@@ -6,6 +6,9 @@ const router = Router();
 router.get(['/api/groups', '/api/groups/', '/groups', '/groups/'], (req, res) =>
   groupMessageController.getGroups(req, res)
 );
+router.get(['/api/groups/:groupId/members', '/api/groups/:groupId/members/', '/groups/:groupId/members', '/groups/:groupId/members/'], (req, res) =>
+  groupMessageController.getMembers(req, res)
+);
 router.get(['/api/groups/:groupId/messages', '/api/groups/:groupId/messages/', '/groups/:groupId/messages', '/groups/:groupId/messages/'], (req, res) =>
   groupMessageController.getMessages(req, res)
 );

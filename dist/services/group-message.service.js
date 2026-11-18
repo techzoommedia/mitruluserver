@@ -382,6 +382,68 @@ class GroupMessageService {
         catch { }
         return result.deletedCount || 0;
     }
+    /**
+     * Get members of a chat group with scroll-based pagination and search
+     */
+    async getGroupMembers(groupId, options = {}) {
+        const slug = (groupId || 'telugu').toLowerCase().trim();
+        await this.ensureDefaultGroupSeeded();
+        const page = Math.max(1, parseInt(String(options.page || 1), 10));
+        const limit = Math.min(Math.max(1, parseInt(String(options.limit || 20), 10)), 60);
+        const skip = (page - 1) * limit;
+        const filter = { moderationStatus: { $ne: 'banned' } };
+        if (options.q && typeof options.q === 'string' && options.q.trim()) {
+            const cleanQ = options.q.replace(/^@/, '').trim();
+            const regex = new RegExp(cleanQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+            filter.$or = [
+                { name: regex },
+                { teluguName: regex },
+                { handle: regex },
+                { mitraId: regex },
+                { location: regex },
+                { bio: regex },
+            ];
+        }
+        const onlineUserIds = new Set(socket_manager_1.socketManager.getOnlineUserIds().map((id) => String(id).toLowerCase()));
+        const [totalMembers, dbUsers] = await Promise.all([
+            user_model_1.UserModel.countDocuments(filter),
+            user_model_1.UserModel.find(filter)
+                .select('name teluguName handle mitraId avatar bio teluguBio location isVerified role isAdmin lastSeen createdAt')
+                .sort({ isVerified: -1, lastSeen: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+        ]);
+        const members = dbUsers.map((u) => {
+            const uid = u._id ? u._id.toString() : '';
+            const handleClean = (u.handle || u.mitraId || '').toLowerCase();
+            const isOnline = onlineUserIds.has(uid.toLowerCase()) || (handleClean ? onlineUserIds.has(handleClean) : false);
+            return {
+                id: uid,
+                _id: uid,
+                name: u.name,
+                teluguName: u.teluguName || u.name,
+                handle: u.mitraId || u.handle || uid,
+                mitraId: u.mitraId || u.handle || uid,
+                avatar: u.avatar || '',
+                bio: u.bio || '',
+                teluguBio: u.teluguBio || '',
+                location: u.location || 'హైదరాబాద్',
+                isVerified: Boolean(u.isVerified),
+                role: u.isAdmin || u.role === 'admin' ? 'admin' : 'member',
+                isOnline,
+                lastSeen: u.lastSeen || null,
+                joinedAt: u.createdAt || null,
+            };
+        });
+        return {
+            members,
+            totalMembers,
+            page,
+            limit,
+            hasMore: skip + dbUsers.length < totalMembers,
+        };
+    }
 }
 exports.GroupMessageService = GroupMessageService;
 exports.groupMessageService = new GroupMessageService();

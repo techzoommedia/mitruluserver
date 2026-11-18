@@ -41,6 +41,27 @@ class GroupMessageController {
             });
         }
     }
+    async getMembers(req, res) {
+        try {
+            const groupId = (req.params.groupId || req.query.groupId || 'telugu').toLowerCase();
+            const page = parseInt(req.query.page, 10) || 1;
+            const limit = parseInt(req.query.limit, 10) || 20;
+            const q = req.query.q || '';
+            const result = await group_message_service_1.groupMessageService.getGroupMembers(groupId, { page, limit, q });
+            res.status(200).json({
+                success: true,
+                groupId,
+                ...result,
+            });
+        }
+        catch (err) {
+            console.error('[GroupMessageController getMembers error]:', err);
+            res.status(500).json({
+                success: false,
+                error: err.message || 'Failed to fetch group members',
+            });
+        }
+    }
     async sendMessage(req, res) {
         try {
             const groupId = (req.params.groupId || req.body.groupId || 'telugu').toLowerCase();
