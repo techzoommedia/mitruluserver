@@ -13,5 +13,8 @@ router.post(['/api/wallet/verify-payment', '/api/wallet/verify-payment/', '/wall
 router.post(['/api/wallet/payout', '/api/wallet/payout/', '/wallet/payout', '/wallet/payout/'], requireAuth, (req, res) =>
   walletController.requestPayout(req, res)
 );
+router.post(['/api/wallet/transfer', '/api/wallet/transfer/', '/wallet/transfer', '/wallet/transfer/'], requireAuth, (req, res) =>
+  walletController.transferCoins(req, res)
+);
 
 export default router;

@@ -7,4 +7,5 @@ const router = (0, express_1.Router)();
 router.post(['/api/wallet/create-order', '/api/wallet/create-order/', '/wallet/create-order', '/wallet/create-order/'], auth_middleware_1.requireAuth, (req, res) => wallet_controller_1.walletController.createOrder(req, res));
 router.post(['/api/wallet/verify-payment', '/api/wallet/verify-payment/', '/wallet/verify-payment', '/wallet/verify-payment/'], auth_middleware_1.requireAuth, (req, res) => wallet_controller_1.walletController.verifyPayment(req, res));
 router.post(['/api/wallet/payout', '/api/wallet/payout/', '/wallet/payout', '/wallet/payout/'], auth_middleware_1.requireAuth, (req, res) => wallet_controller_1.walletController.requestPayout(req, res));
+router.post(['/api/wallet/transfer', '/api/wallet/transfer/', '/wallet/transfer', '/wallet/transfer/'], auth_middleware_1.requireAuth, (req, res) => wallet_controller_1.walletController.transferCoins(req, res));
 exports.default = router;

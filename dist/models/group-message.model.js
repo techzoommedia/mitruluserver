@@ -50,6 +50,10 @@ exports.GroupMessageSchema = new mongoose_1.Schema({
     deletedFor: { type: [String], default: [], index: true },
     isEdited: { type: Boolean, default: false },
     editedAt: { type: Number },
+    type: { type: String, enum: ['text', 'coin_transfer', 'custom_gift'], default: 'text' },
+    coinAmount: { type: Number, default: 0 },
+    giftId: { type: String },
+    giftData: { type: mongoose_1.Schema.Types.Mixed },
 }, {
     collection: 'group_messages',
     timestamps: true,

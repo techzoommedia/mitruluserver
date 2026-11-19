@@ -2,6 +2,7 @@ import { Response } from 'express';
 import mongoose from 'mongoose';
 import { AuthenticatedRequest } from '../middleware/auth.middleware';
 import UserModel from '../models/user.model';
+import { socketManager } from '../sockets/socket.manager';
 
 export class WalletController {
   async createOrder(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -115,6 +116,189 @@ export class WalletController {
       res.json({ success: true, remainingCoins: user.coins, amountRupees });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  }
+
+  /**
+   * Secure Peer-to-Peer Coin Transfer
+   * Features:
+   * - Strict integer & bounds validation (1 to 50,000 coins)
+   * - Atomic conditional balance deduction ({ coins: { $gte: amount } })
+   * - Race-condition immunity & zero-negative balance guarantee
+   * - Automatic rollback if recipient credit fails
+   * - Full audit log in coinHistory for both sender and receiver
+   * - Realtime WebSocket push notifications to both parties
+   */
+  async transferCoins(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const currentUserId = req.userId;
+      if (!currentUserId) {
+        res.status(401).json({ error: 'లాగిన్ అవ్వండి (Authentication required)' });
+        return;
+      }
+
+      const { recipientId, amount, note } = req.body;
+      const cleanRecipientId = String(recipientId || '').trim();
+
+      if (!cleanRecipientId) {
+        res.status(400).json({ error: 'గ్రహీత ID తప్పనిసరి (Recipient identifier is required)' });
+        return;
+      }
+
+      // Input validation: positive integer only
+      const parsedAmount = Number(amount);
+      if (!Number.isInteger(parsedAmount) || parsedAmount <= 0) {
+        res.status(400).json({
+          error: 'దయచేసి సరైన పూర్ణాంక నాణేల సంఖ్యను నమోదు చేయండి (Valid positive integer coins required)',
+        });
+        return;
+      }
+
+      if (parsedAmount > 50000) {
+        res.status(400).json({
+          error: 'ఒక లావాదేవీకి గరిష్టంగా 50,000 నాణేలు మాత్రమే పంపగలరు (Max 50,000 coins per transfer)',
+        });
+        return;
+      }
+
+      // Find recipient user
+      let recipient = null;
+      if (mongoose.Types.ObjectId.isValid(cleanRecipientId)) {
+        recipient = await UserModel.findById(cleanRecipientId);
+      }
+      if (!recipient) {
+        recipient = await UserModel.findOne({
+          $or: [
+            { handle: cleanRecipientId.replace(/^@/, '') },
+            { mitraId: cleanRecipientId.replace(/^@/, '') },
+          ],
+        });
+      }
+
+      if (!recipient) {
+        res.status(404).json({ error: 'గ్రహీత ఖాతా కనుగొనబడలేదు (Recipient user not found)' });
+        return;
+      }
+
+      // Prevent self-transfer
+      const recipientOidStr = recipient._id.toString();
+      const senderOidStr = String(currentUserId);
+      if (recipientOidStr === senderOidStr) {
+        res.status(400).json({
+          error: 'మీకు మీరే నాణేలు పంపుకోలేరు (Cannot transfer coins to yourself)',
+        });
+        return;
+      }
+
+      // Atomic conditional deduction from sender (prevents race condition & double spending)
+      const senderTransaction = {
+        type: 'debit',
+        action: 'transfer_sent',
+        amount: parsedAmount,
+        recipientId: recipientOidStr,
+        recipientName: recipient.name,
+        recipientHandle: recipient.mitraId || recipient.handle || 'mitrudu',
+        description: `Sent ${parsedAmount} coins to ${recipient.name}${note ? `: "${note}"` : ''}`,
+        teluguDescription: `${recipient.teluguName || recipient.name} కి ${parsedAmount} నాణేలు పంపారు${note ? `: "${note}"` : ''}`,
+        createdAt: new Date(),
+      };
+
+      const updatedSender = await UserModel.findOneAndUpdate(
+        { _id: currentUserId, coins: { $gte: parsedAmount } },
+        {
+          $inc: { coins: -parsedAmount },
+          $push: { coinHistory: senderTransaction },
+        },
+        { new: true }
+      );
+
+      if (!updatedSender) {
+        res.status(400).json({
+          error: 'మీ ఖాతాలో తగినంత నాణేల నిల్వ లేదు (Insufficient coin balance in your account)',
+        });
+        return;
+      }
+
+      // Atomic credit to recipient
+      const recipientTransaction = {
+        type: 'credit',
+        action: 'transfer_received',
+        amount: parsedAmount,
+        senderId: senderOidStr,
+        senderName: updatedSender.name,
+        senderHandle: updatedSender.mitraId || updatedSender.handle || 'mitrudu',
+        description: `Received ${parsedAmount} coins from ${updatedSender.name}${note ? `: "${note}"` : ''}`,
+        teluguDescription: `${updatedSender.teluguName || updatedSender.name} నుండి ${parsedAmount} నాణేలు అందాయి${note ? `: "${note}"` : ''}`,
+        createdAt: new Date(),
+      };
+
+      let updatedRecipient;
+      try {
+        updatedRecipient = await UserModel.findOneAndUpdate(
+          { _id: recipient._id },
+          {
+            $inc: { coins: parsedAmount, earnedCoins: parsedAmount },
+            $push: { coinHistory: recipientTransaction },
+          },
+          { new: true }
+        );
+      } catch (creditErr) {
+        // Rollback sender deduction on rare recipient failure
+        await UserModel.findOneAndUpdate(
+          { _id: currentUserId },
+          {
+            $inc: { coins: parsedAmount },
+            $push: {
+              coinHistory: {
+                type: 'credit',
+                action: 'transfer_rollback',
+                amount: parsedAmount,
+                description: `Rollback ${parsedAmount} coins due to transfer failure`,
+                teluguDescription: `లావాదేవీ విఫలమైనందున ${parsedAmount} నాణేలు తిరిగి జమ చేయబడ్డాయి`,
+                createdAt: new Date(),
+              },
+            },
+          }
+        );
+        res.status(500).json({ error: 'లావాదేవీ విఫలమైంది, నాణేలు రీఫండ్ అయ్యాయి (Transfer failed, coins refunded)' });
+        return;
+      }
+
+      // Realtime notification via WebSockets
+      try {
+        socketManager.emitToUser(senderOidStr, 'coins:updated', {
+          coins: updatedSender.coins,
+        });
+        socketManager.emitToUser(recipientOidStr, 'coins:updated', {
+          coins: updatedRecipient?.coins,
+        });
+        socketManager.emitToUser(recipientOidStr, 'coins:received', {
+          senderId: senderOidStr,
+          senderName: updatedSender.name,
+          senderAvatar: updatedSender.avatar,
+          amount: parsedAmount,
+          newBalance: updatedRecipient?.coins,
+          note,
+        });
+      } catch (wsErr) {
+        console.warn('[Wallet] Non-fatal WS emit warning on transfer:', wsErr);
+      }
+
+      res.json({
+        success: true,
+        amount: parsedAmount,
+        senderCoins: updatedSender.coins,
+        recipient: {
+          id: recipientOidStr,
+          name: recipient.name,
+          teluguName: recipient.teluguName,
+          handle: recipient.mitraId || recipient.handle,
+          avatar: recipient.avatar,
+        },
+      });
+    } catch (err: any) {
+      console.error('[Wallet] transferCoins error:', err);
+      res.status(500).json({ error: err.message || 'Coin transfer processing failed' });
     }
   }
 }

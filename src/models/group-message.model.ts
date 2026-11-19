@@ -17,6 +17,10 @@ export interface IGroupMessage extends Document {
   deletedFor?: string[];
   isEdited?: boolean;
   editedAt?: number;
+  type?: 'text' | 'coin_transfer' | 'custom_gift';
+  coinAmount?: number;
+  giftId?: string;
+  giftData?: any;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -37,6 +41,10 @@ export const GroupMessageSchema = new Schema<IGroupMessage>(
     deletedFor: { type: [String], default: [], index: true },
     isEdited: { type: Boolean, default: false },
     editedAt: { type: Number },
+    type: { type: String, enum: ['text', 'coin_transfer', 'custom_gift'], default: 'text' },
+    coinAmount: { type: Number, default: 0 },
+    giftId: { type: String },
+    giftData: { type: Schema.Types.Mixed },
   },
   {
     collection: 'group_messages',
