@@ -111,5 +111,8 @@ exports.UserSchema = new mongoose_1.Schema({
     ],
     lastSeen: { type: Date, default: Date.now, index: true },
 }, { collection: 'users', timestamps: true });
+// High-performance compound indexes for Circle active users query
+exports.UserSchema.index({ isCallActive: 1, callActiveAt: -1, callRating: -1 });
+exports.UserSchema.index({ isCallActive: 1, gender: 1 });
 exports.UserModel = mongoose_1.default.models.User || mongoose_1.default.model('User', exports.UserSchema);
 exports.default = exports.UserModel;

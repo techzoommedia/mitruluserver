@@ -5,6 +5,9 @@ const user_repository_1 = require("../repositories/user.repository");
 class UserService {
     userRepo;
     activeUsersCache = new Map();
+    lastSyncTime = 0;
+    inFlightSync = null;
+    CACHE_TTL_MS = 5000; // 5-second TTL cache for DB sync
     constructor(userRepo = user_repository_1.userRepository) {
         this.userRepo = userRepo;
     }
@@ -14,43 +17,58 @@ class UserService {
     getCachedActiveUsersList() {
         return Array.from(this.activeUsersCache.values()).sort((a, b) => (b.callActiveAt || 0) - (a.callActiveAt || 0) || b.callRating - a.callRating);
     }
-    async syncActiveUsersFromDB() {
-        try {
-            const users = await this.userRepo.findActiveUsers();
-            this.activeUsersCache.clear();
-            for (const u of users) {
-                const id = u._id.toString();
-                this.activeUsersCache.set(id, {
-                    id,
-                    _id: id,
-                    name: u.name,
-                    teluguName: u.teluguName || u.name,
-                    handle: u.mitraId || u.handle,
-                    mitraId: u.mitraId || u.handle,
-                    avatar: u.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop',
-                    bio: u.bio || '',
-                    teluguBio: u.teluguBio || '',
-                    location: u.location || 'హైదరాబాద్, తెలంగాణ',
-                    isVerified: Boolean(u.isVerified),
-                    gender: u.gender || 'prefer_not_to_say',
-                    profession: u.profession || 'కమ్యూనిటీ మిత్రులు',
-                    callCategory: u.callCategory || 'casuals',
-                    isCallActive: true,
-                    callLanguage: u.callLanguage || 'తెలుగు (Telugu)',
-                    callRating: u.callRating ?? 5.0,
-                    callRatingCount: u.callRatingCount ?? 0,
-                    callRateCoins: u.callRateCoins ?? 500,
-                    isOnline: true,
-                    callActiveAt: u.callActiveAt ? new Date(u.callActiveAt).getTime() : Date.now(),
-                });
+    async syncActiveUsersFromDB(force = false) {
+        const now = Date.now();
+        if (!force && now - this.lastSyncTime < this.CACHE_TTL_MS) {
+            return;
+        }
+        if (this.inFlightSync) {
+            return this.inFlightSync;
+        }
+        this.inFlightSync = (async () => {
+            try {
+                const users = await this.userRepo.findActiveUsers();
+                this.activeUsersCache.clear();
+                for (const u of users) {
+                    const id = u._id.toString();
+                    this.activeUsersCache.set(id, {
+                        id,
+                        _id: id,
+                        name: u.name,
+                        teluguName: u.teluguName || u.name,
+                        handle: u.mitraId || u.handle,
+                        mitraId: u.mitraId || u.handle,
+                        avatar: u.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop',
+                        bio: u.bio || '',
+                        teluguBio: u.teluguBio || '',
+                        location: u.location || 'హైదరాబాద్, తెలంగాణ',
+                        isVerified: Boolean(u.isVerified),
+                        gender: u.gender || 'prefer_not_to_say',
+                        profession: u.profession || 'కమ్యూనిటీ మిత్రులు',
+                        callCategory: u.callCategory || 'casuals',
+                        isCallActive: true,
+                        callLanguage: u.callLanguage || 'తెలుగు (Telugu)',
+                        callRating: u.callRating ?? 5.0,
+                        callRatingCount: u.callRatingCount ?? 0,
+                        callRateCoins: u.callRateCoins ?? 500,
+                        isOnline: true,
+                        callActiveAt: u.callActiveAt ? new Date(u.callActiveAt).getTime() : Date.now(),
+                    });
+                }
+                this.lastSyncTime = Date.now();
             }
-        }
-        catch (err) {
-            console.warn('[syncActiveUsersFromDB Error]:', err);
-        }
+            catch (err) {
+                console.warn('[syncActiveUsersFromDB Error]:', err);
+            }
+            finally {
+                this.inFlightSync = null;
+            }
+        })();
+        return this.inFlightSync;
     }
     async fetchActiveCircleUsers() {
-        if (this.activeUsersCache.size === 0) {
+        const now = Date.now();
+        if (this.lastSyncTime === 0 || now - this.lastSyncTime >= this.CACHE_TTL_MS) {
             await this.syncActiveUsersFromDB();
         }
         return this.getCachedActiveUsersList();

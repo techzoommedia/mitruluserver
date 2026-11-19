@@ -155,6 +155,10 @@ export const UserSchema = new Schema<IUser>(
   { collection: 'users', timestamps: true }
 );
 
+// High-performance compound indexes for Circle active users query
+UserSchema.index({ isCallActive: 1, callActiveAt: -1, callRating: -1 });
+UserSchema.index({ isCallActive: 1, gender: 1 });
+
 export const UserModel: mongoose.Model<IUser> =
   (mongoose.models.User as mongoose.Model<IUser>) || mongoose.model<IUser>('User', UserSchema);
 
