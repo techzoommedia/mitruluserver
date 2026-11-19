@@ -11,7 +11,10 @@ class UserController {
     async getUsers(req, res) {
         try {
             const currentUserId = req.userId;
-            const limit = parseInt(req.query.limit || '50', 10);
+            const page = Math.max(1, parseInt(req.query.page || '1', 10));
+            const rawLimit = parseInt(req.query.limit || '50', 10);
+            const limit = Math.min(Math.max(1, rawLimit), 100);
+            const skip = (page - 1) * limit;
             const query = (req.query.q || '').trim();
             const type = req.query.type; // 'followers' | 'following'
             const targetUserId = req.query.userId || currentUserId;
@@ -26,8 +29,8 @@ class UserController {
                         $or: [{ handle: targetUserId.toLowerCase() }, { mitraId: targetUserId.toLowerCase() }],
                     }).select('_id followers isShielded').lean();
                 }
-                if (!targetDoc) {
-                    res.json({ success: true, users: [], totalUsersCount: 0 });
+                if (!targetDoc || (targetDoc.isShielded && (!currentUserId || targetDoc._id.toString() !== currentUserId))) {
+                    res.json({ success: true, users: [], totalUsersCount: 0, isShielded: Boolean(targetDoc?.isShielded) });
                     return;
                 }
                 const followerIds = Array.isArray(targetDoc.followers) ? targetDoc.followers : [];
@@ -48,8 +51,8 @@ class UserController {
                         $or: [{ handle: targetUserId.toLowerCase() }, { mitraId: targetUserId.toLowerCase() }],
                     }).select('_id following isShielded').lean();
                 }
-                if (!targetDoc) {
-                    res.json({ success: true, users: [], totalUsersCount: 0 });
+                if (!targetDoc || (targetDoc.isShielded && (!currentUserId || targetDoc._id.toString() !== currentUserId))) {
+                    res.json({ success: true, users: [], totalUsersCount: 0, isShielded: Boolean(targetDoc?.isShielded) });
                     return;
                 }
                 const followingIds = Array.isArray(targetDoc.following) ? targetDoc.following : [];
@@ -76,8 +79,10 @@ class UserController {
             // Hide banned accounts
             conditions.push({ moderationStatus: { $ne: 'banned' } });
             const finalFilter = conditions.length > 0 ? { $and: conditions } : {};
+            const totalUsersCount = await user_model_1.default.countDocuments(finalFilter);
             const dbUsers = await user_model_1.default.find(finalFilter)
                 .select('name teluguName handle mitraId avatar bio teluguBio location isVerified friends followers following interests isShielded lastSeen')
+                .skip(skip)
                 .limit(limit)
                 .lean();
             let currentDbUser = null;
@@ -114,7 +119,14 @@ class UserController {
                     lastSeen: u.lastSeen,
                 };
             });
-            res.json({ success: true, users, totalUsersCount: users.length });
+            res.json({
+                success: true,
+                users,
+                totalUsersCount,
+                page,
+                totalPages: Math.ceil(totalUsersCount / limit),
+                limit,
+            });
         }
         catch (err) {
             console.error('[UserController.getUsers error]:', err);

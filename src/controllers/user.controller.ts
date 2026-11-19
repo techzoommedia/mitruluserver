@@ -8,7 +8,10 @@ export class UserController {
   async getUsers(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const currentUserId = req.userId;
-      const limit = parseInt((req.query.limit as string) || '50', 10);
+      const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
+      const rawLimit = parseInt((req.query.limit as string) || '50', 10);
+      const limit = Math.min(Math.max(1, rawLimit), 100);
+      const skip = (page - 1) * limit;
       const query = ((req.query.q || '') as string).trim();
       const type = req.query.type as string; // 'followers' | 'following'
       const targetUserId = (req.query.userId as string) || currentUserId;
@@ -26,8 +29,8 @@ export class UserController {
           }).select('_id followers isShielded').lean();
         }
 
-        if (!targetDoc) {
-          res.json({ success: true, users: [], totalUsersCount: 0 });
+        if (!targetDoc || (targetDoc.isShielded && (!currentUserId || targetDoc._id.toString() !== currentUserId))) {
+          res.json({ success: true, users: [], totalUsersCount: 0, isShielded: Boolean(targetDoc?.isShielded) });
           return;
         }
 
@@ -49,8 +52,8 @@ export class UserController {
           }).select('_id following isShielded').lean();
         }
 
-        if (!targetDoc) {
-          res.json({ success: true, users: [], totalUsersCount: 0 });
+        if (!targetDoc || (targetDoc.isShielded && (!currentUserId || targetDoc._id.toString() !== currentUserId))) {
+          res.json({ success: true, users: [], totalUsersCount: 0, isShielded: Boolean(targetDoc?.isShielded) });
           return;
         }
 
@@ -82,8 +85,10 @@ export class UserController {
 
       const finalFilter = conditions.length > 0 ? { $and: conditions } : {};
 
+      const totalUsersCount = await UserModel.countDocuments(finalFilter);
       const dbUsers: any[] = await UserModel.find(finalFilter)
         .select('name teluguName handle mitraId avatar bio teluguBio location isVerified friends followers following interests isShielded lastSeen')
+        .skip(skip)
         .limit(limit)
         .lean();
 
@@ -125,7 +130,14 @@ export class UserController {
         };
       });
 
-      res.json({ success: true, users, totalUsersCount: users.length });
+      res.json({
+        success: true,
+        users,
+        totalUsersCount,
+        page,
+        totalPages: Math.ceil(totalUsersCount / limit),
+        limit,
+      });
     } catch (err: any) {
       console.error('[UserController.getUsers error]:', err);
       res.status(500).json({ error: err.message || 'యూజర్లను లోడ్ చేయడం విఫలమైంది' });
