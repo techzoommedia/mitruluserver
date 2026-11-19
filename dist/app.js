@@ -23,7 +23,8 @@ function createApp() {
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
         allowedHeaders: ['Content-Type', 'Authorization', 'x-mitrulu-client', 'x-mitrulu-encrypt', 'x-mitrulu-userid', 'Accept'],
     }));
-    app.use(express_1.default.json());
+    app.use(express_1.default.json({ limit: '50mb' }));
+    app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
     // Mount API & health routes
     app.use(routes_1.default);
     return app;

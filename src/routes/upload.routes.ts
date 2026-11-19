@@ -10,5 +10,8 @@ router.post(['/api/upload/sign', '/api/upload/sign/', '/upload/sign', '/upload/s
 router.post(['/api/upload/process', '/api/upload/process/', '/upload/process', '/upload/process/'], optionalAuth, (req, res) =>
   uploadController.processUpload(req, res)
 );
+router.post(['/api/upload', '/api/upload/', '/upload', '/upload/'], optionalAuth, (req, res) =>
+  uploadController.directUpload(req, res)
+);
 
 export default router;
