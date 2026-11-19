@@ -263,6 +263,15 @@ export class GroupMessageService {
       return { success: true, messageId, deletedCount: 0 };
     }
 
+    if (
+      msg.type === 'coin_transfer' ||
+      msg.type === 'custom_gift' ||
+      Boolean((msg as any).coinAmount) ||
+      Boolean((msg as any).giftId)
+    ) {
+      throw new Error('Forbidden: Coin transfers and gift sharing messages cannot be unsent');
+    }
+
     await this.assertGroupMessageSender(myId, msg, 'unsend');
 
     const deletedCount = await groupMessageRepository.deleteMessageById(messageId);

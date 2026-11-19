@@ -545,6 +545,12 @@ class MessageService {
         if (!msg) {
             return { success: true, messageId, deletedCount: 0 };
         }
+        if (msg.type === 'coin_transfer' ||
+            msg.type === 'custom_gift' ||
+            Boolean(msg.coinAmount) ||
+            Boolean(msg.giftId)) {
+            throw new Error('Forbidden: Coin transfers and gift sharing messages cannot be unsent');
+        }
         const dbMe = await this.resolveUser(String(myId).trim());
         const myIdsLower = new Set(this.getCanonicalIdsForUser(String(myId).trim(), dbMe).map((s) => s.toLowerCase()));
         const msgSenderId = String(msg.senderId || '').toLowerCase();
