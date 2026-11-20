@@ -13,6 +13,9 @@ router.get(['/api/users/profile', '/api/users/profile/', '/users/profile', '/use
 router.post(['/api/users/profile', '/api/users/profile/', '/users/profile', '/users/profile/'], requireAuth, (req, res) =>
   userController.updateProfile(req, res)
 );
+router.put(['/api/users/profile', '/api/users/profile/', '/users/profile', '/users/profile/'], requireAuth, (req, res) =>
+  userController.updateProfile(req, res)
+);
 router.post(['/api/users/follow', '/api/users/follow/', '/users/follow', '/users/follow/'], requireAuth, (req, res) =>
   userController.toggleFollow(req, res)
 );

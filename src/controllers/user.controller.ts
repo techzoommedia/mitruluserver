@@ -223,14 +223,34 @@ export class UserController {
         return;
       }
 
-      const { name, teluguName, bio, teluguBio, location, avatar, interests, handle, mitraId } = req.body;
+      const {
+        name,
+        teluguName,
+        bio,
+        teluguBio,
+        location,
+        avatar,
+        interests,
+        handle,
+        mitraId,
+        isShielded,
+        gender,
+        profession,
+        callLanguage,
+        callRateCoins,
+      } = req.body;
       const updateData: any = {};
       if (name) updateData.name = name.trim();
       if (teluguName) updateData.teluguName = teluguName.trim();
       if (bio !== undefined) updateData.bio = bio;
       if (teluguBio !== undefined) updateData.teluguBio = teluguBio;
-      if (location) updateData.location = location;
-      if (avatar) updateData.avatar = avatar;
+      if (location !== undefined) updateData.location = location;
+      if (avatar !== undefined) updateData.avatar = avatar;
+      if (isShielded !== undefined) updateData.isShielded = Boolean(isShielded);
+      if (gender !== undefined) updateData.gender = gender;
+      if (profession !== undefined) updateData.profession = profession;
+      if (callLanguage !== undefined) updateData.callLanguage = callLanguage;
+      if (callRateCoins !== undefined) updateData.callRateCoins = Number(callRateCoins);
       if (Array.isArray(interests)) updateData.interests = interests;
       if (mitraId || handle) {
         const clean = (mitraId || handle).trim().toLowerCase().replace(/^@/, '');

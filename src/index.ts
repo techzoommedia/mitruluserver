@@ -34,7 +34,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
     setTimeout(() => {
       if (!isShuttingDown) {
         server.close();
-        server.listen(PORT);
+        server.listen(PORT, '0.0.0.0');
       }
     }, waitMs);
   } else {
@@ -46,7 +46,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
 });
 
 async function startServer() {
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     listenRetries = 0;
     console.log(`[Mitrulu Server] Real-Time Circle Server running on port ${PORT}`);
     console.log(`[Mitrulu Server] WebSocket URL: ws://localhost:${PORT}`);

@@ -17,23 +17,70 @@ export class WalletController {
       let coins = 2000;
       let rupees = 3000;
 
+      const PACKAGE_RATES: Record<string, { coins: number; rupees: number }> = {
+        '1': { coins: 1, rupees: 1 },
+        '100': { coins: 100, rupees: 170 },
+        '500': { coins: 500, rupees: 800 },
+        '2000': { coins: 2000, rupees: 3000 },
+        '5000': { coins: 5000, rupees: 7000 },
+        '10000': { coins: 10000, rupees: 13000 },
+      };
+
       if (customCoins) {
         coins = Math.max(1, Number(customCoins));
         rupees = Math.max(1, Math.round(coins * 1.5));
+      } else if (packageId && PACKAGE_RATES[String(packageId)]) {
+        coins = PACKAGE_RATES[String(packageId)].coins;
+        rupees = PACKAGE_RATES[String(packageId)].rupees;
       } else if (packageId) {
-        coins = Number(packageId);
+        coins = Number(packageId) || 2000;
         rupees = Math.max(1, Math.round(coins * 1.5));
       }
 
-      const orderId = `order_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_live_SSI6V2PjrkG5Fl';
+      const keySecret = process.env.RAZORPAY_KEY_SECRET || 'Iih3AxfFbpTQYZYiVPoMHa6i';
+      let realOrderId = `order_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+      // Create official order with Razorpay API if live keys are present
+      if (keyId && keySecret && !keyId.includes('mock')) {
+        try {
+          const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+          const rzpResp = await fetch('https://api.razorpay.com/v1/orders', {
+            method: 'POST',
+            headers: {
+              Authorization: `Basic ${auth}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              amount: rupees * 100,
+              currency: 'INR',
+              receipt: `rcpt_${currentUserId.slice(-6)}_${Date.now()}`,
+              notes: {
+                userId: currentUserId,
+                coins,
+                rupees,
+              },
+            }),
+          });
+          const rzpData: any = await rzpResp.json();
+          if (rzpData?.id) {
+            realOrderId = rzpData.id;
+          } else {
+            console.warn('[WalletController.createOrder] Razorpay API warning:', rzpData);
+          }
+        } catch (apiErr: any) {
+          console.warn('[WalletController.createOrder] Failed calling Razorpay API directly:', apiErr.message);
+        }
+      }
+
       res.json({
         success: true,
-        orderId,
+        orderId: realOrderId,
         amount: rupees * 100,
         currency: 'INR',
         coins,
         rupees,
-        keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_mock',
+        keyId,
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to create wallet order' });
@@ -48,8 +95,17 @@ export class WalletController {
         return;
       }
 
-      const { coins, orderId, paymentId } = req.body;
+      const {
+        coins,
+        orderId,
+        paymentId,
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+      } = req.body;
       const coinsNum = Number(coins) || 0;
+      const finalOrderId = razorpay_order_id || orderId;
+      const finalPaymentId = razorpay_payment_id || paymentId;
 
       const user = await UserModel.findById(currentUserId);
       if (!user) {
@@ -66,13 +122,13 @@ export class WalletController {
         balanceAfter: user.coins,
         description: `Purchased ${coinsNum} coins`,
         teluguDescription: `${coinsNum} నాణేలు కొనుగోలు చేసారు`,
-        orderId,
-        paymentId,
+        orderId: finalOrderId,
+        paymentId: finalPaymentId,
         createdAt: new Date(),
       });
 
       await user.save();
-      res.json({ success: true, coins: user.coins });
+      res.json({ success: true, coins: user.coins, newBalance: user.coins });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
