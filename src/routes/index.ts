@@ -14,10 +14,12 @@ import livekitRoutes from './livekit.routes';
 import reportRoutes from './report.routes';
 import uploadRoutes from './upload.routes';
 import adminRoutes from './admin.routes';
+import authRoutes from './auth.routes';
 
 const router = Router();
 
 router.use(healthRoutes);
+router.use(authRoutes);
 router.use(circleRoutes);
 router.use(messageRoutes);
 router.use(groupRoutes);
