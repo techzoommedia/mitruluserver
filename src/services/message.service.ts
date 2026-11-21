@@ -456,7 +456,7 @@ export class MessageService {
         if (u.mitraId) userById.set(String(u.mitraId).toLowerCase(), u);
       }
 
-      for (const [, val] of partnerIdMap) {
+      partnerIdMap.forEach((val) => {
         const dbU = userById.get(val.partnerId) || userById.get(val.partnerId.toLowerCase());
         if (dbU) {
           val.fallbackUser = {
@@ -473,20 +473,44 @@ export class MessageService {
             lastSeen: dbU.lastSeen,
           };
         }
-      }
+      });
     }
 
-    return Array.from(partnerIdMap.values())
+    // STRICT DEDUPLICATION: Merge conversations for the same partner (e.g. if one msg had ObjectId and another had handle)
+    const uniquePartnerMap = new Map<string, any>();
+    partnerIdMap.forEach((val) => {
+      const canonicalKey = String(val.fallbackUser.id || val.fallbackUser._id || val.partnerId || '').toLowerCase();
+      if (!canonicalKey) return;
+
+      if (!uniquePartnerMap.has(canonicalKey)) {
+        uniquePartnerMap.set(canonicalKey, { ...val });
+      } else {
+        const existing = uniquePartnerMap.get(canonicalKey);
+        const existingTs = Number(existing.lastMessage?.timestamp || 0);
+        const currentTs = Number(val.lastMessage?.timestamp || 0);
+        if (currentTs > existingTs) {
+          existing.lastMessage = val.lastMessage;
+        }
+        existing.unreadCount = (Number(existing.unreadCount) || 0) + (Number(val.unreadCount) || 0);
+      }
+    });
+
+    const dedupedList: any[] = [];
+    uniquePartnerMap.forEach((val) => {
+      dedupedList.push(val);
+    });
+
+    return dedupedList
       .filter((v) => {
         const pid = String(v.fallbackUser.id || v.fallbackUser._id || '').toLowerCase();
         const ph = String(v.fallbackUser.handle || v.fallbackUser.mitraId || '').toLowerCase().replace(/^@/, '');
         return !myCanonicalIds.has(pid) && (!ph || !myCanonicalIds.has(ph));
       })
       .map((v) => ({
-      targetUser: v.fallbackUser,
-      lastMessage: this.toPublicMessage(v.lastMessage),
-      unreadCount: v.unreadCount,
-    }));
+        targetUser: v.fallbackUser,
+        lastMessage: this.toPublicMessage(v.lastMessage),
+        unreadCount: v.unreadCount,
+      }));
   }
 
   /**
