@@ -394,11 +394,19 @@ export class SocketManager {
             });
           }
           const sorted = communityRoomStoreService.getSortedParticipants(roomId);
-          this.emitToRoom(`community_${roomId}`, 'community:participant_joined', { roomId, participant, participants: sorted, memberCount: sorted.length });
-          this.emitToRoom(`community_${roomId}`, 'community:action', { roomId, action: 'join', participant, participants: sorted, memberCount: sorted.length });
+          const joinedPayload = { roomId, participant, participants: sorted, memberCount: sorted.length };
+          const actionPayload = { roomId, action: 'join', participant, participants: sorted, memberCount: sorted.length };
+
+          this.emitToRoom(`community_${roomId}`, 'community:participant_joined', joinedPayload);
+          this.emitToRoom(`community_${roomId}`, 'community:action', actionPayload);
+          this.emitToRoom(`circle_comm_${roomId}`, 'community:participant_joined', joinedPayload);
+          this.emitToRoom(`circle_comm_${roomId}`, 'community:action', actionPayload);
+
           if (canonicalId && canonicalId !== roomId) {
-            this.emitToRoom(`community_${canonicalId}`, 'community:participant_joined', { roomId: canonicalId, participant, participants: sorted, memberCount: sorted.length });
-            this.emitToRoom(`community_${canonicalId}`, 'community:action', { roomId: canonicalId, action: 'join', participant, participants: sorted, memberCount: sorted.length });
+            this.emitToRoom(`community_${canonicalId}`, 'community:participant_joined', { ...joinedPayload, roomId: canonicalId });
+            this.emitToRoom(`community_${canonicalId}`, 'community:action', { ...actionPayload, roomId: canonicalId });
+            this.emitToRoom(`circle_comm_${canonicalId}`, 'community:participant_joined', { ...joinedPayload, roomId: canonicalId });
+            this.emitToRoom(`circle_comm_${canonicalId}`, 'community:action', { ...actionPayload, roomId: canonicalId });
           }
           // Immediately reply back to caller with current full sorted participant list
           socket.emit('community:action', { roomId, action: 'sync', participants: sorted, memberCount: sorted.length });
@@ -411,19 +419,29 @@ export class SocketManager {
         if (roomId) {
           const canonicalId = communityRoomStoreService.getCanonicalId(roomId);
           socket.leave(`community_${roomId}`);
+          socket.leave(`circle_comm_${roomId}`);
           if (canonicalId && canonicalId !== roomId) {
             socket.leave(`community_${canonicalId}`);
+            socket.leave(`circle_comm_${canonicalId}`);
           }
           const uid = userId || socket.data.userId;
           if (uid) {
             communityRoomStoreService.leave(roomId, uid);
           }
           const sorted = communityRoomStoreService.getSortedParticipants(roomId);
-          this.emitToRoom(`community_${roomId}`, 'community:participant_left', { roomId, userId: uid, participants: sorted, memberCount: sorted.length });
-          this.emitToRoom(`community_${roomId}`, 'community:action', { roomId, action: 'leave', userId: uid, participants: sorted, memberCount: sorted.length });
+          const leftPayload = { roomId, userId: uid, participants: sorted, memberCount: sorted.length };
+          const actionPayload = { roomId, action: 'leave', userId: uid, participants: sorted, memberCount: sorted.length };
+
+          this.emitToRoom(`community_${roomId}`, 'community:participant_left', leftPayload);
+          this.emitToRoom(`community_${roomId}`, 'community:action', actionPayload);
+          this.emitToRoom(`circle_comm_${roomId}`, 'community:participant_left', leftPayload);
+          this.emitToRoom(`circle_comm_${roomId}`, 'community:action', actionPayload);
+
           if (canonicalId && canonicalId !== roomId) {
-            this.emitToRoom(`community_${canonicalId}`, 'community:participant_left', { roomId: canonicalId, userId: uid, participants: sorted, memberCount: sorted.length });
-            this.emitToRoom(`community_${canonicalId}`, 'community:action', { roomId: canonicalId, action: 'leave', userId: uid, participants: sorted, memberCount: sorted.length });
+            this.emitToRoom(`community_${canonicalId}`, 'community:participant_left', { ...leftPayload, roomId: canonicalId });
+            this.emitToRoom(`community_${canonicalId}`, 'community:action', { ...actionPayload, roomId: canonicalId });
+            this.emitToRoom(`circle_comm_${canonicalId}`, 'community:participant_left', { ...leftPayload, roomId: canonicalId });
+            this.emitToRoom(`circle_comm_${canonicalId}`, 'community:action', { ...actionPayload, roomId: canonicalId });
           }
           this.broadcastCommunityRooms(true).catch(() => {});
         }
@@ -714,6 +732,20 @@ export class SocketManager {
             userId: uid,
             user: socket.data.user,
           });
+
+          // Also bridge community room listeners automatically
+          const cleanId = data.roomName.replace(/^circle_comm_/, '');
+          socket.join(`community_${cleanId}`);
+          socket.join(`circle_comm_${cleanId}`);
+          const canonical = communityRoomStoreService.getCanonicalId(cleanId);
+          if (canonical && canonical !== cleanId) {
+            socket.join(`community_${canonical}`);
+            socket.join(`circle_comm_${canonical}`);
+          }
+          const sorted = communityRoomStoreService.getSortedParticipants(cleanId);
+          if (sorted.length > 0) {
+            socket.emit('community:action', { roomId: cleanId, action: 'sync', participants: sorted, memberCount: sorted.length });
+          }
         }
       });
 

@@ -357,10 +357,16 @@ export class CircleController {
       }
 
       const effectiveRoomName = roomName || callId;
+      const strippedRoomName = effectiveRoomName.replace(/^circle_comm_/, '');
 
       // 1. Check if Community Room
       const communityRoom = await CommunityRoomModel.findOne({
-        $or: [{ roomId: effectiveRoomName }, { name: effectiveRoomName }],
+        $or: [
+          { roomId: effectiveRoomName },
+          { roomId: strippedRoomName },
+          { name: effectiveRoomName },
+          { name: strippedRoomName },
+        ],
       }).lean();
 
       if (communityRoom) {
@@ -372,12 +378,16 @@ export class CircleController {
           return;
         }
 
-        const liveKitToken = await liveKitService.generateToken(userId, userName, communityRoom.roomId);
+        const canonicalLiveKitRoom = effectiveRoomName.startsWith('circle_comm_')
+          ? effectiveRoomName
+          : `circle_comm_${communityRoom.roomId}`;
+
+        const liveKitToken = await liveKitService.generateToken(userId, userName, canonicalLiveKitRoom);
         res.json({
           success: true,
           token: liveKitToken,
           serverUrl: LIVEKIT_URL,
-          roomName: communityRoom.roomId,
+          roomName: canonicalLiveKitRoom,
           isCommunity: true,
           callType: communityRoom.type || 'audio',
           room: communityRoom,
