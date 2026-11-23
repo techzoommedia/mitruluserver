@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { JWT_SECRET, LIVEKIT_URL } from '../config/env';
 import { userService } from '../services/user.service';
 import { communityRoomService } from '../services/community-room.service';
+import { communityRoomStoreService } from '../services/room-store.service';
 import { socketManager } from '../sockets/socket.manager';
 import { sendIncomingCallPush } from '../services/push.service';
 import { CommunityRoomModel } from '../models/community-room.model';
@@ -56,6 +57,30 @@ export class CircleController {
       }
 
       const result = await communityRoomService.joinRoom(userId, roomId);
+
+      // Instant 0ms broadcast to room socket listeners
+      const canonicalRoom = communityRoomStoreService.getCanonicalId(roomId);
+      socketManager.emitToRoom(`community_${roomId}`, 'community:participant_joined', {
+        roomId,
+        participant: {
+          id: userId,
+          role: 'speaker',
+          isMuted: false,
+          isVideoOff: false,
+        },
+      });
+      if (canonicalRoom && canonicalRoom !== roomId) {
+        socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:participant_joined', {
+          roomId: canonicalRoom,
+          participant: {
+            id: userId,
+            role: 'speaker',
+            isMuted: false,
+            isVideoOff: false,
+          },
+        });
+      }
+
       socketManager.broadcastCommunityRooms().catch(() => {});
       res.json(result);
     } catch (err: any) {
@@ -67,10 +92,21 @@ export class CircleController {
   getRoomActions(req: Request, res: Response): void {
     try {
       const roomId = req.query.roomId as string;
-      const userId = req.query.userId as string;
+      let userId = req.query.userId as string;
       if (!roomId) {
         res.status(400).json({ error: 'roomId is required' });
         return;
+      }
+      if (!userId) {
+        const token = req.headers.authorization?.startsWith('Bearer ')
+          ? req.headers.authorization.slice(7)
+          : null;
+        if (token) {
+          try {
+            const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+            userId = decoded.userId || decoded.id;
+          } catch {}
+        }
       }
       const data = communityRoomService.getRoomActions(roomId, userId);
       res.json(data);
@@ -81,6 +117,35 @@ export class CircleController {
 
   postRoomActions(req: Request, res: Response): void {
     try {
+      const token = req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : null;
+      let decodedUserId: string | undefined;
+      let decodedUser: any;
+      if (token) {
+        try {
+          const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+          decodedUserId = decoded.userId || decoded.id || decoded._id;
+          decodedUser = decoded;
+        } catch {}
+      }
+      if (!req.body.actorUserId && decodedUserId) {
+        req.body.actorUserId = decodedUserId;
+      }
+      if (req.body.action === 'join' && (!req.body.participant || !req.body.participant.id)) {
+        const uid = req.body.targetUserId || req.body.actorUserId || decodedUserId;
+        if (uid) {
+          req.body.participant = {
+            id: uid,
+            name: decodedUser?.name || req.body.targetUserName || 'Member',
+            teluguName: decodedUser?.teluguName,
+            handle: decodedUser?.handle || 'member',
+            avatar: decodedUser?.avatar || '',
+            role: 'speaker',
+          };
+        }
+      }
+
       const result = communityRoomService.handleRoomAction(req.body);
       const { roomId, action, actorUserId, targetUserId } = req.body;
 
@@ -93,6 +158,18 @@ export class CircleController {
         memberCount: result.memberCount,
         participants: result.participants,
       });
+
+      const canonicalRoom = communityRoomStoreService.getCanonicalId(roomId);
+      if (canonicalRoom && canonicalRoom !== roomId) {
+        socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:action', {
+          roomId: canonicalRoom,
+          action,
+          actorUserId,
+          targetUserId,
+          memberCount: result.memberCount,
+          participants: result.participants,
+        });
+      }
 
       socketManager.broadcastCommunityRooms().catch(() => {});
       res.json(result);
@@ -226,7 +303,11 @@ export class CircleController {
       }
 
       const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-      const uid = decoded.userId;
+      const uid = decoded.userId || decoded.id || decoded._id;
+      if (!uid) {
+        res.status(401).json({ error: 'User identifier missing in token' });
+        return;
+      }
 
       const user = await userService.updateActiveStatusViaHttp(uid, req.body);
       socketManager.broadcastActiveUsersInstant();

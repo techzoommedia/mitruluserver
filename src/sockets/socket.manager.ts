@@ -114,7 +114,7 @@ export class SocketManager {
       if (token) {
         try {
           const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-          socket.data.userId = decoded.userId || decoded.id;
+          socket.data.userId = decoded.userId || decoded.id || decoded._id || authUserId;
           socket.data.user = decoded;
         } catch (e) {
           if (authUserId) {
@@ -374,7 +374,11 @@ export class SocketManager {
       socket.on('community:join', (data: { roomId: string; participant?: any }) => {
         const { roomId, participant } = data || {};
         if (roomId) {
+          const canonicalId = communityRoomStoreService.getCanonicalId(roomId);
           socket.join(`community_${roomId}`);
+          if (canonicalId && canonicalId !== roomId) {
+            socket.join(`community_${canonicalId}`);
+          }
           if (participant?.id) {
             communityRoomStoreService.join(roomId, {
               id: participant.id,
@@ -389,7 +393,15 @@ export class SocketManager {
               joinedAt: Date.now(),
             });
           }
-          this.emitToRoom(`community_${roomId}`, 'community:participant_joined', { roomId, participant });
+          const sorted = communityRoomStoreService.getSortedParticipants(roomId);
+          this.emitToRoom(`community_${roomId}`, 'community:participant_joined', { roomId, participant, participants: sorted, memberCount: sorted.length });
+          this.emitToRoom(`community_${roomId}`, 'community:action', { roomId, action: 'join', participant, participants: sorted, memberCount: sorted.length });
+          if (canonicalId && canonicalId !== roomId) {
+            this.emitToRoom(`community_${canonicalId}`, 'community:participant_joined', { roomId: canonicalId, participant, participants: sorted, memberCount: sorted.length });
+            this.emitToRoom(`community_${canonicalId}`, 'community:action', { roomId: canonicalId, action: 'join', participant, participants: sorted, memberCount: sorted.length });
+          }
+          // Immediately reply back to caller with current full sorted participant list
+          socket.emit('community:action', { roomId, action: 'sync', participants: sorted, memberCount: sorted.length });
           this.broadcastCommunityRooms(true).catch(() => {});
         }
       });
@@ -397,20 +409,42 @@ export class SocketManager {
       socket.on('community:leave', (data: { roomId: string; userId?: string }) => {
         const { roomId, userId } = data || {};
         if (roomId) {
+          const canonicalId = communityRoomStoreService.getCanonicalId(roomId);
           socket.leave(`community_${roomId}`);
+          if (canonicalId && canonicalId !== roomId) {
+            socket.leave(`community_${canonicalId}`);
+          }
           const uid = userId || socket.data.userId;
           if (uid) {
             communityRoomStoreService.leave(roomId, uid);
           }
-          this.emitToRoom(`community_${roomId}`, 'community:participant_left', { roomId, userId: uid });
+          const sorted = communityRoomStoreService.getSortedParticipants(roomId);
+          this.emitToRoom(`community_${roomId}`, 'community:participant_left', { roomId, userId: uid, participants: sorted, memberCount: sorted.length });
+          this.emitToRoom(`community_${roomId}`, 'community:action', { roomId, action: 'leave', userId: uid, participants: sorted, memberCount: sorted.length });
+          if (canonicalId && canonicalId !== roomId) {
+            this.emitToRoom(`community_${canonicalId}`, 'community:participant_left', { roomId: canonicalId, userId: uid, participants: sorted, memberCount: sorted.length });
+            this.emitToRoom(`community_${canonicalId}`, 'community:action', { roomId: canonicalId, action: 'leave', userId: uid, participants: sorted, memberCount: sorted.length });
+          }
           this.broadcastCommunityRooms(true).catch(() => {});
         }
       });
 
       socket.on('community:action', (data: any) => {
         if (data?.roomId) {
+          const canonicalId = communityRoomStoreService.getCanonicalId(data.roomId);
           this.emitToRoom(`community_${data.roomId}`, 'community:action', data);
+          if (canonicalId && canonicalId !== data.roomId) {
+            this.emitToRoom(`community_${canonicalId}`, 'community:action', { ...data, roomId: canonicalId });
+          }
           this.broadcastCommunityRooms(true).catch(() => {});
+        }
+      });
+
+      socket.on('community:heartbeat', (data: { roomId?: string; userId?: string }) => {
+        const roomId = data?.roomId;
+        const uid = data?.userId || socket.data.userId;
+        if (roomId && uid) {
+          communityRoomStoreService.heartbeat(roomId, uid);
         }
       });
 
@@ -674,6 +708,12 @@ export class SocketManager {
       socket.on('call:join_room', (data: { roomName: string }) => {
         if (data?.roomName) {
           socket.join(data.roomName);
+          const uid = socket.data.userId;
+          socket.to(data.roomName).emit('call:peer_joined', {
+            roomName: data.roomName,
+            userId: uid,
+            user: socket.data.user,
+          });
         }
       });
 
@@ -694,10 +734,6 @@ export class SocketManager {
       socket.on('disconnect', () => {
         if (userId) {
           const uid = String(userId);
-          const affectedRooms = communityRoomStoreService.removeUserFromAllRooms(uid);
-          if (affectedRooms.length > 0) {
-            this.broadcastCommunityRooms(true).catch(() => {});
-          }
 
           if (this.userSocketsMap.has(uid)) {
             this.userSocketsMap.get(uid)!.delete(socket.id);
@@ -712,6 +748,17 @@ export class SocketManager {
               // Grace period of 3 seconds to differentiate between page refresh and closing browser
               setTimeout(async () => {
                 if (!this.userSocketsMap.has(uid) || this.userSocketsMap.get(uid)!.size === 0) {
+                  const affectedRooms = communityRoomStoreService.removeUserFromAllRooms(uid);
+                  if (affectedRooms.length > 0) {
+                    for (const rId of affectedRooms) {
+                      this.emitToRoom(`community_${rId}`, 'community:participant_left', { roomId: rId, userId: uid });
+                      const canonicalId = communityRoomStoreService.getCanonicalId(rId);
+                      if (canonicalId && canonicalId !== rId) {
+                        this.emitToRoom(`community_${canonicalId}`, 'community:participant_left', { roomId: canonicalId, userId: uid });
+                      }
+                    }
+                    this.broadcastCommunityRooms(true).catch(() => {});
+                  }
                   console.log(`[CircleSocket] User ${uid} closed Chrome/Tab - marking INACTIVE and removing from active list`);
                   userService.removeCacheUser(uid);
                   try {

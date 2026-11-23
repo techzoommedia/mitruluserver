@@ -274,6 +274,26 @@ export class UserService {
     if (callCategory) updateFields.callCategory = callCategory;
 
     const user = await this.userRepo.updateUser(uid, updateFields);
+    if (activeState && user) {
+      this.setCacheUser(uid, {
+        name: (user as any).name || clientUser?.name,
+        teluguName: (user as any).teluguName || clientUser?.teluguName,
+        handle: (user as any).mitraId || (user as any).handle || clientUser?.handle,
+        mitraId: (user as any).mitraId || (user as any).handle,
+        avatar: (user as any).avatar || clientUser?.avatar || '',
+        bio: (user as any).bio || clientUser?.bio,
+        teluguBio: (user as any).teluguBio || clientUser?.teluguBio,
+        location: (user as any).location || clientUser?.location,
+        isVerified: (user as any).isVerified ?? clientUser?.isVerified,
+        gender: (user as any).gender || gender,
+        profession: (user as any).profession || profession,
+        callCategory: (user as any).callCategory || callCategory,
+        callLanguage: (user as any).callLanguage || callLanguage,
+        callRating: (user as any).callRating ?? 5.0,
+        callRatingCount: (user as any).callRatingCount ?? 1,
+        callRateCoins: (user as any).callRateCoins ?? 1,
+      });
+    }
     return user;
   }
 }

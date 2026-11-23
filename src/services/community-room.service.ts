@@ -54,6 +54,10 @@ export class CommunityRoomService {
         const rId = r.roomId || r.id;
         const dbId = r._id ? r._id.toString() : '';
 
+        if (dbId && rId && dbId !== rId) {
+          communityRoomStoreService.registerAlias(dbId, rId);
+        }
+
         // Live count from LiveKit Cloud or in-memory CommunityRoomStore (0ms instant)
         const localCount = communityRoomStoreService.getParticipantCount(rId);
         const liveCount = Math.max(
@@ -133,6 +137,9 @@ export class CommunityRoomService {
 
     // Register active participant in room session
     const targetRoomId = room.roomId || roomId;
+    if (room._id && targetRoomId) {
+      communityRoomStoreService.registerAlias(room._id.toString(), targetRoomId);
+    }
     communityRoomStoreService.join(targetRoomId, {
       id: user._id.toString(),
       name: user.name || user.handle || 'Member',

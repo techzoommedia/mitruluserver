@@ -22,16 +22,44 @@ const PARTICIPANT_STALE_TIMEOUT_MS = 25000;
 
 export class CommunityRoomStoreService {
   private rooms = new Map<string, RoomData>();
+  private roomAliases = new Map<string, string>();
+
+  registerAlias(alias: string, canonicalRoomId: string): void {
+    if (alias && canonicalRoomId && alias !== canonicalRoomId) {
+      this.roomAliases.set(alias, canonicalRoomId);
+      // If data was already placed in alias room, merge it into canonical room
+      if (this.rooms.has(alias)) {
+        const aliasRoom = this.rooms.get(alias)!;
+        const canonicalRoom = this.getOrCreateRoom(canonicalRoomId, aliasRoom.adminId);
+        for (const [uid, p] of aliasRoom.participants.entries()) {
+          canonicalRoom.participants.set(uid, p);
+        }
+        for (const buid of aliasRoom.blockedUserIds) {
+          canonicalRoom.blockedUserIds.add(buid);
+        }
+        this.rooms.delete(alias);
+      }
+    }
+  }
+
+  getCanonicalId(roomId: string): string {
+    return this.roomAliases.get(roomId) || roomId;
+  }
+
+  private resolveRoomId(roomId: string): string {
+    return this.roomAliases.get(roomId) || roomId;
+  }
 
   private getOrCreateRoom(roomId: string, initialAdminId?: string): RoomData {
-    if (!this.rooms.has(roomId)) {
-      this.rooms.set(roomId, {
+    const rId = this.resolveRoomId(roomId);
+    if (!this.rooms.has(rId)) {
+      this.rooms.set(rId, {
         participants: new Map(),
         blockedUserIds: new Set(),
         adminId: initialAdminId || '',
       });
     }
-    const room = this.rooms.get(roomId)!;
+    const room = this.rooms.get(rId)!;
     if (initialAdminId && !room.adminId) {
       room.adminId = initialAdminId;
     }
@@ -48,7 +76,8 @@ export class CommunityRoomStoreService {
   }
 
   getRoom(roomId: string, callerUserId?: string, initialAdminId?: string): RoomData {
-    const room = this.getOrCreateRoom(roomId, initialAdminId);
+    const rId = this.resolveRoomId(roomId);
+    const room = this.getOrCreateRoom(rId, initialAdminId);
     if (callerUserId && room.participants.has(callerUserId)) {
       room.participants.get(callerUserId)!.lastSeen = Date.now();
     }
@@ -57,7 +86,8 @@ export class CommunityRoomStoreService {
   }
 
   join(roomId: string, participant: Omit<RoomParticipantState, 'lastSeen'>) {
-    const room = this.getOrCreateRoom(roomId, participant.id);
+    const rId = this.resolveRoomId(roomId);
+    const room = this.getOrCreateRoom(rId, participant.id);
     if (room.blockedUserIds.has(participant.id)) {
       return { success: false, isBlocked: true, error: 'User is blocked from this room' };
     }
@@ -73,8 +103,9 @@ export class CommunityRoomStoreService {
   }
 
   leave(roomId: string, userId: string) {
-    if (this.rooms.has(roomId)) {
-      const room = this.rooms.get(roomId)!;
+    const rId = this.resolveRoomId(roomId);
+    if (this.rooms.has(rId)) {
+      const room = this.rooms.get(rId)!;
       room.participants.delete(userId);
       this.pruneStale(room);
     }
@@ -94,7 +125,8 @@ export class CommunityRoomStoreService {
 
   heartbeat(roomId: string, userId?: string) {
     if (!roomId) return;
-    const room = this.getOrCreateRoom(roomId);
+    const rId = this.resolveRoomId(roomId);
+    const room = this.getOrCreateRoom(rId);
     if (userId && room.participants.has(userId)) {
       room.participants.get(userId)!.lastSeen = Date.now();
     }
@@ -102,8 +134,9 @@ export class CommunityRoomStoreService {
   }
 
   getParticipantCount(roomId: string): number {
-    if (!this.rooms.has(roomId)) return 0;
-    const room = this.rooms.get(roomId)!;
+    const rId = this.resolveRoomId(roomId);
+    if (!this.rooms.has(rId)) return 0;
+    const room = this.rooms.get(rId)!;
     this.pruneStale(room);
     return room.participants.size;
   }
@@ -116,8 +149,9 @@ export class CommunityRoomStoreService {
   }
 
   clearRoom(roomId: string) {
-    if (this.rooms.has(roomId)) {
-      this.rooms.get(roomId)!.participants.clear();
+    const rId = this.resolveRoomId(roomId);
+    if (this.rooms.has(rId)) {
+      this.rooms.get(rId)!.participants.clear();
     }
   }
 }

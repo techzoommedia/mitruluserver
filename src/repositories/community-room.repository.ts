@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { CommunityRoomModel, ICommunityRoom } from '../models/community-room.model';
 
 export interface ICommunityRoomRepository {
@@ -12,6 +13,11 @@ export class CommunityRoomRepository implements ICommunityRoomRepository {
   }
 
   async findByRoomId(roomId: string): Promise<ICommunityRoom | null> {
+    if (mongoose.isValidObjectId(roomId)) {
+      return CommunityRoomModel.findOne({
+        $or: [{ roomId }, { _id: roomId }],
+      });
+    }
     return CommunityRoomModel.findOne({ roomId });
   }
 
