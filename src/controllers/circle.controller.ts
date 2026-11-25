@@ -60,7 +60,8 @@ export class CircleController {
 
       // Instant 0ms broadcast to room socket listeners
       const canonicalRoom = communityRoomStoreService.getCanonicalId(roomId);
-      socketManager.emitToRoom(`community_${roomId}`, 'community:participant_joined', {
+      const sorted = communityRoomStoreService.getSortedParticipants(roomId);
+      const joinedPayload = {
         roomId,
         participant: {
           id: userId,
@@ -68,16 +69,19 @@ export class CircleController {
           isMuted: false,
           isVideoOff: false,
         },
-      });
+        participants: sorted,
+        memberCount: sorted.length,
+      };
+      socketManager.emitToRoom(`community_${roomId}`, 'community:participant_joined', joinedPayload);
+      socketManager.emitToRoom(`circle_comm_${roomId}`, 'community:participant_joined', joinedPayload);
       if (canonicalRoom && canonicalRoom !== roomId) {
         socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:participant_joined', {
+          ...joinedPayload,
           roomId: canonicalRoom,
-          participant: {
-            id: userId,
-            role: 'speaker',
-            isMuted: false,
-            isVideoOff: false,
-          },
+        });
+        socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'community:participant_joined', {
+          ...joinedPayload,
+          roomId: canonicalRoom,
         });
       }
 
@@ -148,27 +152,49 @@ export class CircleController {
 
       const result = communityRoomService.handleRoomAction(req.body);
       const { roomId, action, actorUserId, targetUserId } = req.body;
+      const uid = targetUserId || actorUserId || decodedUserId;
 
-      // Broadcast to room sockets in 0ms
-      socketManager.emitToRoom(`community_${roomId}`, 'community:action', {
+      const actionPayload = {
         roomId,
         action,
         actorUserId,
         targetUserId,
+        userId: uid,
         memberCount: result.memberCount,
         participants: result.participants,
-      });
+      };
+
+      const leftPayload = {
+        roomId,
+        userId: uid,
+        targetUserId: uid,
+        memberCount: result.memberCount,
+        participants: result.participants,
+      };
+
+      // Broadcast to room sockets in 0ms across all room channel formats
+      socketManager.emitToRoom(`community_${roomId}`, 'community:action', actionPayload);
+      socketManager.emitToRoom(`circle_comm_${roomId}`, 'community:action', actionPayload);
+      socketManager.emitToRoom(roomId, 'community:action', actionPayload);
+
+      if (action === 'leave' || action === 'remove' || action === 'terminate') {
+        socketManager.emitToRoom(`community_${roomId}`, 'community:participant_left', leftPayload);
+        socketManager.emitToRoom(`circle_comm_${roomId}`, 'community:participant_left', leftPayload);
+        socketManager.emitToRoom(roomId, 'community:participant_left', leftPayload);
+        socketManager.emitToRoom(`circle_comm_${roomId}`, 'call:peer_left', { roomName: `circle_comm_${roomId}`, userId: uid });
+        socketManager.emitToRoom(`community_${roomId}`, 'call:peer_left', { roomName: `circle_comm_${roomId}`, userId: uid });
+      }
 
       const canonicalRoom = communityRoomStoreService.getCanonicalId(roomId);
       if (canonicalRoom && canonicalRoom !== roomId) {
-        socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:action', {
-          roomId: canonicalRoom,
-          action,
-          actorUserId,
-          targetUserId,
-          memberCount: result.memberCount,
-          participants: result.participants,
-        });
+        socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:action', { ...actionPayload, roomId: canonicalRoom });
+        socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'community:action', { ...actionPayload, roomId: canonicalRoom });
+        socketManager.emitToRoom(canonicalRoom, 'community:action', { ...actionPayload, roomId: canonicalRoom });
+        if (action === 'leave' || action === 'remove' || action === 'terminate') {
+          socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:participant_left', { ...leftPayload, roomId: canonicalRoom });
+          socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'community:participant_left', { ...leftPayload, roomId: canonicalRoom });
+          socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'call:peer_left', { roomName: `circle_comm_${canonicalRoom}`, userId: uid });
+        }
       }
 
       socketManager.broadcastCommunityRooms().catch(() => {});

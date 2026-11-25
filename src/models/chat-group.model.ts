@@ -14,6 +14,7 @@ export interface IChatGroup extends Document {
   heldBy?: string;
   rules?: string;
   customMemberCount?: number;
+  admins: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,6 +34,7 @@ export const ChatGroupSchema = new Schema<IChatGroup>(
     heldBy: { type: String, default: '' },
     rules: { type: String, default: '' },
     customMemberCount: { type: Number, default: 0 },
+    admins: { type: [String], default: [] },
   },
   {
     collection: 'chat_groups',

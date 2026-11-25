@@ -13,9 +13,9 @@ const server = http.createServer(app);
 // Initialize Socket.IO with all signaling & authentication handlers
 socketManager.initialize(server);
 
-// Periodic background sync for community rooms (every 3s broadcast to all sockets)
+// Periodic background sync for community rooms (every 3s broadcast to all sockets once DB is ready)
 const roomsBroadcastInterval = setInterval(async () => {
-  if (socketManager.getActiveSocketsCount() > 0) {
+  if (mongoose.connection.readyState === 1 && socketManager.getActiveSocketsCount() > 0) {
     await socketManager.broadcastCommunityRooms();
   }
 }, 3000);

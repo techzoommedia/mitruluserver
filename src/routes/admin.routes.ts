@@ -84,6 +84,12 @@ router.post(['/api/admin/groups', '/api/admin/groups/', '/admin/groups', '/admin
 router.patch(['/api/admin/groups/:groupId', '/api/admin/groups/:groupId/', '/admin/groups/:groupId', '/admin/groups/:groupId/'], optionalAuth, (req, res) =>
   adminGroupController.updateGroup(req, res)
 );
+router.post(['/api/admin/groups/:groupId/admins', '/api/admin/groups/:groupId/admins/', '/admin/groups/:groupId/admins', '/admin/groups/:groupId/admins/'], optionalAuth, (req, res) =>
+  adminGroupController.promoteAdmin(req, res)
+);
+router.delete(['/api/admin/groups/:groupId/admins/:userId', '/api/admin/groups/:groupId/admins/:userId/', '/admin/groups/:groupId/admins/:userId', '/admin/groups/:groupId/admins/:userId/'], optionalAuth, (req, res) =>
+  adminGroupController.removeAdmin(req, res)
+);
 router.patch(['/api/admin/groups/:groupId/hold', '/api/admin/groups/:groupId/hold/', '/admin/groups/:groupId/hold', '/admin/groups/:groupId/hold/'], optionalAuth, (req, res) =>
   adminGroupController.toggleHold(req, res)
 );

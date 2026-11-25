@@ -43,6 +43,17 @@ export class CommunityRoomService {
     this.cachedRooms = rooms;
   }
 
+  isUserRoomAdmin(roomId: string, userId?: string): boolean {
+    if (!roomId || !userId) return false;
+    const cleanRoom = String(roomId).replace(/^circle_comm_/, '').toLowerCase();
+    const uid = String(userId).toLowerCase();
+    const room = this.cachedRooms.find(
+      (r) => String(r.roomId || r.id).toLowerCase() === cleanRoom || String(r.id).toLowerCase() === cleanRoom
+    );
+    if (!room || !Array.isArray(room.admins)) return false;
+    return room.admins.some((a) => String(a).toLowerCase() === uid);
+  }
+
   async fetchCommunityRoomsWithCounts(force = false): Promise<IMappedCommunityRoom[]> {
     try {
       const [dbRooms, livekitCounts] = await Promise.all([
@@ -140,13 +151,18 @@ export class CommunityRoomService {
     if (room._id && targetRoomId) {
       communityRoomStoreService.registerAlias(room._id.toString(), targetRoomId);
     }
+    const uidStr = user._id.toString();
+    const isAdmin =
+      Array.isArray(room.admins) &&
+      room.admins.some((a: string) => String(a).toLowerCase() === uidStr.toLowerCase());
+
     communityRoomStoreService.join(targetRoomId, {
-      id: user._id.toString(),
+      id: uidStr,
       name: user.name || user.handle || 'Member',
       teluguName: user.teluguName,
       handle: user.handle || 'member',
       avatar: user.avatar || '',
-      role: 'speaker',
+      role: isAdmin ? 'admin' : 'speaker',
       isMuted: false,
       isRestricted: false,
       isVideoOff: false,
@@ -210,6 +226,7 @@ export class CommunityRoomService {
         if (!participant || !participant.id) {
           throw new Error('participant data required');
         }
+        const isAdmin = this.isUserRoomAdmin(roomId, participant.id);
         const result = communityRoomStoreService.join(roomId, {
           id: participant.id,
           name: participant.name || 'User',
@@ -218,7 +235,7 @@ export class CommunityRoomService {
           avatar:
             participant.avatar ||
             'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop',
-          role: participant.role || (room.participants.size === 0 ? 'host' : 'speaker'),
+          role: isAdmin ? 'admin' : (participant.role || (room.participants.size === 0 ? 'host' : 'speaker')),
           isMuted: Boolean(participant.isMuted),
           isRestricted: false,
           isVideoOff: Boolean(participant.isVideoOff),

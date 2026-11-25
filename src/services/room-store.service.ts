@@ -4,7 +4,7 @@ export interface RoomParticipantState {
   teluguName?: string;
   handle: string;
   avatar: string;
-  role: 'host' | 'speaker' | 'listener';
+  role: 'admin' | 'host' | 'speaker' | 'listener';
   isMuted: boolean;
   isRestricted: boolean;
   isVideoOff: boolean;
@@ -18,7 +18,7 @@ interface RoomData {
   adminId: string;
 }
 
-const PARTICIPANT_STALE_TIMEOUT_MS = 25000;
+const PARTICIPANT_STALE_TIMEOUT_MS = 45000;
 
 export class CommunityRoomStoreService {
   private rooms = new Map<string, RoomData>();
@@ -43,11 +43,13 @@ export class CommunityRoomStoreService {
   }
 
   getCanonicalId(roomId: string): string {
-    return this.roomAliases.get(roomId) || roomId;
+    const clean = String(roomId || '').replace(/^circle_comm_/, '');
+    return this.roomAliases.get(clean) || this.roomAliases.get(roomId) || clean;
   }
 
   private resolveRoomId(roomId: string): string {
-    return this.roomAliases.get(roomId) || roomId;
+    const clean = String(roomId || '').replace(/^circle_comm_/, '');
+    return this.roomAliases.get(clean) || this.roomAliases.get(roomId) || clean;
   }
 
   private getOrCreateRoom(roomId: string, initialAdminId?: string): RoomData {
@@ -103,19 +105,38 @@ export class CommunityRoomStoreService {
   }
 
   leave(roomId: string, userId: string) {
+    if (!roomId || !userId) return;
     const rId = this.resolveRoomId(roomId);
+    const cleanUid = String(userId);
     if (this.rooms.has(rId)) {
       const room = this.rooms.get(rId)!;
-      room.participants.delete(userId);
+      room.participants.delete(cleanUid);
+      for (const [id, p] of room.participants.entries()) {
+        if (id === cleanUid || p.id === cleanUid || (p.handle && p.handle === cleanUid)) {
+          room.participants.delete(id);
+        }
+      }
       this.pruneStale(room);
     }
   }
 
   removeUserFromAllRooms(userId: string): string[] {
     const affectedRooms: string[] = [];
+    if (!userId) return affectedRooms;
+    const cleanUid = String(userId);
     for (const [roomId, room] of this.rooms.entries()) {
-      if (room.participants.has(userId)) {
-        room.participants.delete(userId);
+      let removed = false;
+      if (room.participants.has(cleanUid)) {
+        room.participants.delete(cleanUid);
+        removed = true;
+      }
+      for (const [id, p] of room.participants.entries()) {
+        if (id === cleanUid || p.id === cleanUid || (p.handle && p.handle === cleanUid)) {
+          room.participants.delete(id);
+          removed = true;
+        }
+      }
+      if (removed) {
         this.pruneStale(room);
         affectedRooms.push(roomId);
       }
@@ -123,14 +144,17 @@ export class CommunityRoomStoreService {
     return affectedRooms;
   }
 
-  heartbeat(roomId: string, userId?: string) {
-    if (!roomId) return;
+  heartbeat(roomId: string, userId?: string): boolean {
+    if (!roomId) return false;
     const rId = this.resolveRoomId(roomId);
     const room = this.getOrCreateRoom(rId);
+    let found = false;
     if (userId && room.participants.has(userId)) {
       room.participants.get(userId)!.lastSeen = Date.now();
+      found = true;
     }
     this.pruneStale(room);
+    return found;
   }
 
   getParticipantCount(roomId: string): number {
@@ -144,8 +168,8 @@ export class CommunityRoomStoreService {
   getSortedParticipants(roomId: string, callerUserId?: string): RoomParticipantState[] {
     const room = this.getRoom(roomId, callerUserId);
     const list = Array.from(room.participants.values());
-    const priority = { host: 0, speaker: 1, listener: 2 };
-    return list.sort((a, b) => (priority[a.role] ?? 3) - (priority[b.role] ?? 3));
+    const priority: Record<string, number> = { admin: 0, host: 1, speaker: 2, listener: 3 };
+    return list.sort((a, b) => (priority[a.role] ?? 4) - (priority[b.role] ?? 4));
   }
 
   clearRoom(roomId: string) {
