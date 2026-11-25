@@ -19,6 +19,7 @@ export class SocketManager {
   private callTimeoutsMap = new Map<string, NodeJS.Timeout>();
   private socketCommunityRooms = new Map<string, Set<string>>();
   private socketCallRooms = new Map<string, Set<string>>();
+  private lastRoomsBroadcastHash = '';
 
   initialize(server: HttpServer): SocketIOServer {
     this.io = new SocketIOServer(server, {
@@ -82,6 +83,13 @@ export class SocketManager {
     if (!this.io || mongoose.connection.readyState !== 1) return;
     try {
       const rooms = await communityRoomService.fetchCommunityRoomsWithCounts(force);
+      const hash = rooms
+        .map((r) => `${r.roomId}:${r.activeParticipants}:${r.isStopped}:${(r.admins || []).join(',')}:${r.name}:${r.teluguTitle}:${r.avatar}`)
+        .join('|');
+      if (!force && hash === this.lastRoomsBroadcastHash) {
+        return;
+      }
+      this.lastRoomsBroadcastHash = hash;
       this.io.emit('circle:rooms_updated', { rooms });
     } catch (err) {
       console.error('[broadcastCommunityRooms] Error:', err);
@@ -156,8 +164,9 @@ export class SocketManager {
         }
 
         const isDbReady = mongoose.connection.readyState === 1;
+        const isValidObjectId = mongoose.Types.ObjectId.isValid(uid);
 
-        if (isDbReady) {
+        if (isDbReady && isValidObjectId) {
           // Also join user's handle and mitraId rooms so messages sent to handle reach socket
           UserModel.findById(uid)
             .select('_id handle mitraId')
@@ -976,7 +985,9 @@ export class SocketManager {
               this.userSocketsMap.delete(uid);
               const now = Date.now();
               this.lastSeenMap.set(uid, now);
-              UserModel.findByIdAndUpdate(uid, { lastSeen: new Date(now) }).exec().catch(() => { });
+              if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(uid)) {
+                UserModel.findByIdAndUpdate(uid, { lastSeen: new Date(now) }).exec().catch(() => { });
+              }
               this.broadcastOnlineUsers();
 
               // User has closed all tabs/app
@@ -1005,10 +1016,12 @@ export class SocketManager {
                   }
                   console.log(`[CircleSocket] User ${uid} closed Chrome/Tab - marking INACTIVE and removing from active list`);
                   userService.removeCacheUser(uid);
-                  try {
-                    await userService.updateActiveStatusViaHttp(uid, { isCallActive: false });
-                  } catch (e) {
-                    console.warn(`[CircleSocket] Error marking user ${uid} inactive on close:`, e);
+                  if (mongoose.connection.readyState === 1 && mongoose.Types.ObjectId.isValid(uid)) {
+                    try {
+                      await userService.updateActiveStatusViaHttp(uid, { isCallActive: false });
+                    } catch (e) {
+                      console.warn(`[CircleSocket] Error marking user ${uid} inactive on close:`, e);
+                    }
                   }
                   this.broadcastActiveUsersInstant();
                 }

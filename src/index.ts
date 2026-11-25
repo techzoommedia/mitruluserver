@@ -13,12 +13,12 @@ const server = http.createServer(app);
 // Initialize Socket.IO with all signaling & authentication handlers
 socketManager.initialize(server);
 
-// Periodic background sync for community rooms (every 3s broadcast to all sockets once DB is ready)
+// Periodic background reconciliation for community rooms (10s interval; joins/leaves broadcast at 0ms)
 const roomsBroadcastInterval = setInterval(async () => {
   if (mongoose.connection.readyState === 1 && socketManager.getActiveSocketsCount() > 0) {
     await socketManager.broadcastCommunityRooms();
   }
-}, 3000);
+}, 10000);
 
 let isShuttingDown = false;
 let listenRetries = 0;
