@@ -547,6 +547,196 @@ export class CircleController {
     }
   }
 
+  private extractAuthUserId(req: Request): string | undefined {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) return undefined;
+    try {
+      const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+      return decoded.userId || decoded.id || decoded._id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async getIncomingCall(req: Request, res: Response): Promise<void> {
+    try {
+      const userId = this.extractAuthUserId(req);
+      if (!userId) {
+        res.json({ success: true, hasIncomingCall: false, call: null });
+        return;
+      }
+
+      const session = await callSessionRepository.findActiveIncomingCall(userId);
+      if (!session) {
+        res.json({ success: true, hasIncomingCall: false, call: null });
+        return;
+      }
+
+      res.json({
+        success: true,
+        hasIncomingCall: true,
+        call: {
+          callId: session.callId,
+          callerId: session.callerId,
+          callerName: session.callerName,
+          callerTeluguName: session.callerTeluguName,
+          callerHandle: session.callerHandle,
+          callerAvatar: session.callerAvatar,
+          roomName: session.roomName,
+          callType: session.callType,
+          caller: {
+            id: session.callerId,
+            name: session.callerName,
+            teluguName: session.callerTeluguName,
+            handle: session.callerHandle,
+            avatar: session.callerAvatar,
+          },
+        },
+      });
+    } catch (err: any) {
+      console.warn('[getIncomingCall error]:', err?.message || err);
+      res.json({ success: false, hasIncomingCall: false, call: null });
+    }
+  }
+
+  async getCallRespondStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const callId = req.query.callId as string;
+      if (!callId) {
+        res.status(400).json({ success: false, error: 'callId is required' });
+        return;
+      }
+      const session = await callSessionRepository.findByCallId(callId);
+      if (!session) {
+        res.json({ success: false, error: 'Call session not found' });
+        return;
+      }
+      res.json({ success: true, status: session.status, callId: session.callId, roomName: session.roomName });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to check call status' });
+    }
+  }
+
+  async respondToCallHttp(req: Request, res: Response): Promise<void> {
+    try {
+      const { callId, action } = req.body || {};
+      if (!callId || (action !== 'accept' && action !== 'decline')) {
+        res.status(400).json({ success: false, error: 'Valid callId and action (accept|decline) are required' });
+        return;
+      }
+
+      const response = await callService.respondToCall(callId, action);
+      if (response.action === 'accept') {
+        socketManager.emitToUser(response.session.callerId, 'call:accepted', {
+          callId,
+          roomName: response.session.roomName,
+          token: response.callerToken,
+          serverUrl: response.serverUrl,
+          callType: response.session.callType,
+        });
+        res.json({
+          success: true,
+          callId,
+          roomName: response.session.roomName,
+          token: response.receiverToken,
+          serverUrl: response.serverUrl,
+          callType: response.session.callType,
+        });
+      } else {
+        socketManager.emitToUser(response.session.callerId, 'call:declined', {
+          callId,
+          message: response.message,
+        });
+        res.json({ success: true, declined: true });
+      }
+    } catch (err: any) {
+      console.error('[respondToCallHttp error]:', err);
+      res.status(400).json({ success: false, error: err?.message || 'Failed to respond to call' });
+    }
+  }
+
+  async startCallHttp(req: Request, res: Response): Promise<void> {
+    try {
+      const callerId = this.extractAuthUserId(req);
+      if (!callerId) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+
+      const { targetUserId, callType = 'audio' } = req.body || {};
+      const result = await callService.startCall(callerId, targetUserId, callType);
+
+      socketManager.emitToUser(targetUserId, 'call:incoming', result.incomingPayload);
+      sendIncomingCallPush({
+        targetUserId: String(targetUserId),
+        callerId: result.incomingPayload.caller.id,
+        callerName: result.incomingPayload.caller.name,
+        callerAvatar: result.incomingPayload.caller.avatar,
+        callType: result.incomingPayload.callType,
+        callId: result.incomingPayload.callId,
+        roomName: result.incomingPayload.roomName,
+      }).catch(() => {});
+
+      const caller = await userService.getUserById(callerId).catch(() => null);
+      res.json({
+        ...result.callerResponse,
+        serverUrl: LIVEKIT_URL,
+        costCoins: result.costCoins,
+        remainingCoins: caller?.coins,
+      });
+    } catch (err: any) {
+      const status = err?.insufficientCoins ? 402 : err?.isOffline ? 400 : 400;
+      res.status(status).json({
+        success: false,
+        error: err?.message || 'Call failed to initiate',
+        insufficientCoins: Boolean(err?.insufficientCoins),
+        isOffline: Boolean(err?.isOffline),
+      });
+    }
+  }
+
+  async timeoutCallHttp(req: Request, res: Response): Promise<void> {
+    try {
+      const callerId = this.extractAuthUserId(req);
+      if (!callerId) {
+        res.status(401).json({ success: false, error: 'Unauthorized' });
+        return;
+      }
+
+      const { targetUserId, callId, reason } = req.body || {};
+      const session = callId
+        ? await callSessionRepository.findByCallId(callId)
+        : await callSessionRepository.findLatestRingingSession(callerId, targetUserId);
+
+      if (session && session.status === 'ringing') {
+        const target = await userService.getUserById(session.targetUserId).catch(() => null);
+        const costCoins = target?.callRateCoins || 500;
+        await callService.handleTimeout(session.callId, costCoins);
+
+        socketManager.emitToUser(callerId, 'call:timeout', {
+          callId: session.callId,
+          message: 'కాల్ స్వీకరించబడలేదు. నాణేలు రీఫండ్ చేయబడ్డాయి (Call timed out, coins refunded).',
+        });
+        socketManager.emitToUser(session.targetUserId, 'call:timeout', { callId: session.callId });
+      }
+
+      if (reason === 'not_taken_within_3_min' && targetUserId) {
+        await userService.toggleActiveStatus(targetUserId, { isCallActive: false }).catch(() => {});
+        socketManager.broadcastActiveUsersInstant();
+      }
+
+      const updatedCaller = await userService.getUserById(callerId).catch(() => null);
+      res.json({
+        success: true,
+        remainingCoins: updatedCaller?.coins,
+      });
+    } catch (err: any) {
+      console.error('[timeoutCallHttp error]:', err);
+      res.status(500).json({ success: false, error: err?.message || 'Failed to timeout call' });
+    }
+  }
+
   async endCallHttp(req: Request, res: Response): Promise<void> {
     try {
       const { callId, roomName, durationSeconds } = req.body || {};

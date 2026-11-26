@@ -4,6 +4,8 @@ export interface ICallSessionRepository {
   create(data: Partial<ICallSession>): Promise<ICallSession>;
   findByCallId(callId: string): Promise<ICallSession | null>;
   findByCallOrRoom(callId?: string, roomName?: string): Promise<ICallSession | null>;
+  findActiveIncomingCall(targetUserId: string): Promise<ICallSession | null>;
+  findLatestRingingSession(callerId: string, targetUserId?: string): Promise<ICallSession | null>;
   updateStatus(callId: string, status: string, extra?: any): Promise<ICallSession | null>;
   findRecentCalls(userId: string, targetUserId?: string, limit?: number): Promise<any[]>;
 }
@@ -24,6 +26,26 @@ export class CallSessionRepository implements ICallSessionRepository {
     if (filters.length === 0) return null;
 
     return CallSessionModel.findOne({ $or: filters });
+  }
+
+  async findActiveIncomingCall(targetUserId: string): Promise<ICallSession | null> {
+    const threeMinutesAgo = new Date(Date.now() - 180_000);
+    return CallSessionModel.findOne({
+      targetUserId: { $in: [targetUserId, String(targetUserId)] },
+      status: 'ringing',
+      createdAt: { $gte: threeMinutesAgo },
+    }).sort({ createdAt: -1 });
+  }
+
+  async findLatestRingingSession(callerId: string, targetUserId?: string): Promise<ICallSession | null> {
+    const query: any = {
+      callerId: { $in: [callerId, String(callerId)] },
+      status: 'ringing',
+    };
+    if (targetUserId) {
+      query.targetUserId = { $in: [targetUserId, String(targetUserId)] };
+    }
+    return CallSessionModel.findOne(query).sort({ createdAt: -1 });
   }
 
   async updateStatus(callId: string, status: string, extra: any = {}): Promise<ICallSession | null> {

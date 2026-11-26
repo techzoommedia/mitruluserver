@@ -31,7 +31,9 @@ export class SocketManager {
         credentials: true,
       },
       pingInterval: 25000,
-      pingTimeout: 20000,
+      pingTimeout: 60000,
+      connectTimeout: 45000,
+      perMessageDeflate: false,
     });
 
     this.setupAuthMiddleware();

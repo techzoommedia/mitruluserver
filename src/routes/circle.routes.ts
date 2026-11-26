@@ -34,6 +34,21 @@ router.post(['/api/circle/active-status', '/api/circle/active-status/', '/circle
 router.post(['/api/circle/call/token', '/api/circle/call/token/', '/circle/call/token', '/circle/call/token/'], (req, res) =>
   circleController.getCallToken(req, res)
 );
+router.get(['/api/circle/call/incoming', '/api/circle/call/incoming/', '/circle/call/incoming', '/circle/call/incoming/'], (req, res) =>
+  circleController.getIncomingCall(req, res)
+);
+router.get(['/api/circle/call/respond', '/api/circle/call/respond/', '/circle/call/respond', '/circle/call/respond/'], (req, res) =>
+  circleController.getCallRespondStatus(req, res)
+);
+router.post(['/api/circle/call/respond', '/api/circle/call/respond/', '/circle/call/respond', '/circle/call/respond/'], (req, res) =>
+  circleController.respondToCallHttp(req, res)
+);
+router.post(['/api/circle/call/start', '/api/circle/call/start/', '/circle/call/start', '/circle/call/start/'], (req, res) =>
+  circleController.startCallHttp(req, res)
+);
+router.post(['/api/circle/call/timeout', '/api/circle/call/timeout/', '/circle/call/timeout', '/circle/call/timeout/'], (req, res) =>
+  circleController.timeoutCallHttp(req, res)
+);
 router.get(['/api/circle/call/history', '/api/circle/call/history/', '/circle/call/history', '/circle/call/history/'], (req, res) =>
   circleController.getCallHistory(req, res)
 );

@@ -26,6 +26,9 @@ export class CommunityRoomService {
   private roomRepo: ICommunityRoomRepository;
   private userRepo: IUserRepository;
   private cachedRooms: IMappedCommunityRoom[] = [];
+  private lastFetchAt = 0;
+  private inFlightFetch: Promise<IMappedCommunityRoom[]> | null = null;
+  private readonly ROOMS_CACHE_TTL_MS = 2500;
 
   constructor(
     roomRepo: ICommunityRoomRepository = communityRoomRepository,
@@ -55,58 +58,73 @@ export class CommunityRoomService {
   }
 
   async fetchCommunityRoomsWithCounts(force = false): Promise<IMappedCommunityRoom[]> {
-    try {
-      const [dbRooms, livekitCounts] = await Promise.all([
-        this.roomRepo.findAll(),
-        liveKitService.getRoomParticipantCounts(force),
-      ]);
-
-      const mappedRooms: IMappedCommunityRoom[] = dbRooms.map((r: any) => {
-        const rId = r.roomId || r.id;
-        const dbId = r._id ? r._id.toString() : '';
-
-        if (dbId && rId && dbId !== rId) {
-          communityRoomStoreService.registerAlias(dbId, rId);
-        }
-
-        // Live count from LiveKit Cloud or in-memory CommunityRoomStore (0ms instant)
-        const localCount = communityRoomStoreService.getParticipantCount(rId);
-        const liveCount = Math.max(
-          (dbId ? livekitCounts.get(`circle_comm_${dbId}`) : 0) || 0,
-          (rId ? livekitCounts.get(`circle_comm_${rId}`) : 0) || 0,
-          (rId ? livekitCounts.get(rId) : 0) || 0,
-          (dbId ? livekitCounts.get(dbId) : 0) || 0,
-          localCount,
-          0
-        );
-
-        return {
-          id: rId,
-          roomId: rId,
-          name: r.name,
-          teluguTitle: r.teluguTitle,
-          language: r.language || 'Telugu',
-          type: r.type || 'audio',
-          topic: r.topic || '',
-          avatar: r.avatar,
-          isStopped: Boolean(r.isStopped),
-          stoppedReason: r.stoppedReason || '',
-          admins: r.admins || [],
-          activeParticipants: liveCount,
-          maxParticipants: r.maxParticipants || 50,
-          costCoins: r.costCoins || 0,
-          tags: r.tags || [],
-        };
-      });
-
-      if (mappedRooms.length > 0) {
-        this.cachedRooms = mappedRooms;
-      }
-      return mappedRooms;
-    } catch (err) {
-      console.warn('[fetchCommunityRoomsWithCounts Error]:', err);
+    const now = Date.now();
+    if (!force && this.cachedRooms.length > 0 && now - this.lastFetchAt < this.ROOMS_CACHE_TTL_MS) {
       return this.cachedRooms;
     }
+    if (this.inFlightFetch) {
+      return this.inFlightFetch;
+    }
+
+    this.inFlightFetch = (async () => {
+      try {
+        const [dbRooms, livekitCounts] = await Promise.all([
+          this.roomRepo.findAll(),
+          liveKitService.getRoomParticipantCounts(force),
+        ]);
+
+        const mappedRooms: IMappedCommunityRoom[] = dbRooms.map((r: any) => {
+          const rId = r.roomId || r.id;
+          const dbId = r._id ? r._id.toString() : '';
+
+          if (dbId && rId && dbId !== rId) {
+            communityRoomStoreService.registerAlias(dbId, rId);
+          }
+
+          // Live count from LiveKit Cloud or in-memory CommunityRoomStore (0ms instant)
+          const localCount = communityRoomStoreService.getParticipantCount(rId);
+          const liveCount = Math.max(
+            (dbId ? livekitCounts.get(`circle_comm_${dbId}`) : 0) || 0,
+            (rId ? livekitCounts.get(`circle_comm_${rId}`) : 0) || 0,
+            (rId ? livekitCounts.get(rId) : 0) || 0,
+            (dbId ? livekitCounts.get(dbId) : 0) || 0,
+            localCount,
+            0
+          );
+
+          return {
+            id: rId,
+            roomId: rId,
+            name: r.name,
+            teluguTitle: r.teluguTitle,
+            language: r.language || 'Telugu',
+            type: r.type || 'audio',
+            topic: r.topic || '',
+            avatar: r.avatar,
+            isStopped: Boolean(r.isStopped),
+            stoppedReason: r.stoppedReason || '',
+            admins: r.admins || [],
+            activeParticipants: liveCount,
+            maxParticipants: r.maxParticipants || 50,
+            costCoins: r.costCoins || 0,
+            tags: r.tags || [],
+          };
+        });
+
+        if (mappedRooms.length > 0) {
+          this.cachedRooms = mappedRooms;
+          this.lastFetchAt = Date.now();
+        }
+        return mappedRooms;
+      } catch (err) {
+        console.warn('[fetchCommunityRoomsWithCounts Error]:', err);
+        return this.cachedRooms;
+      } finally {
+        this.inFlightFetch = null;
+      }
+    })();
+
+    return this.inFlightFetch;
   }
 
   async joinRoom(userId: string, roomId: string) {
