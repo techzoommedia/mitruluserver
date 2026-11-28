@@ -117,7 +117,7 @@ export class MessageService {
       mediaType: d.mediaType,
       audioDuration: d.audioDuration,
       timestamp: d.timestamp,
-      status: d.status || 'sent',
+      status: d.status === 'delivered' || d.status === 'seen' ? d.status : 'sent',
       isEdited: Boolean(d.isEdited),
       editedAt: d.editedAt,
     };
@@ -166,7 +166,12 @@ export class MessageService {
       (dbTarget?.handle && onlineIds.includes(dbTarget.handle)) ||
       (dbTarget?.mitraId && onlineIds.includes(dbTarget.mitraId));
 
-    const initialStatus: MessageStatus = data.status || (isTargetOnline ? 'delivered' : 'sent');
+    const initialStatus: MessageStatus =
+      data.status === 'seen'
+        ? 'seen'
+        : isTargetOnline || data.status === 'delivered'
+          ? 'delivered'
+          : 'sent';
 
     const messageToSave = {
       id: messageId,
@@ -583,28 +588,31 @@ export class MessageService {
     const cleanUserId = String(userId).trim();
     const dbUser = await this.resolveUser(cleanUserId);
     const canonicalId = dbUser ? String(dbUser._id) : cleanUserId;
+    const myIdsList = this.getCanonicalIdsForUser(cleanUserId, dbUser);
 
     const undelivered = await messageRepository.findMessages({
-      targetUserId: canonicalId,
-      status: 'sent',
+      targetUserId: { $in: myIdsList },
+      status: { $in: ['sent', 'sending'] },
     }, 100);
 
     if (undelivered.length === 0) return;
 
     await messageRepository.updateManyStatus(
-      { targetUserId: canonicalId, status: 'sent' },
+      { targetUserId: { $in: myIdsList }, status: { $in: ['sent', 'sending'] } },
       'delivered'
     );
 
     // Group by sender and notify each sender that their messages reached destination
-    const senders = new Set(undelivered.map((m: any) => m.senderId));
-    senders.forEach((senderId) => {
-      socketManager.emitToUser(senderId, 'direct:status', {
-        targetUserId: senderId,
+    const senders = new Set(undelivered.map((m: any) => String(m.senderId)));
+    for (const senderId of senders) {
+      if (!senderId) continue;
+      const dbSender = await this.resolveUser(senderId).catch(() => null);
+      this.emitToUserIdentities(senderId, dbSender, 'direct:status', {
+        targetUserId: dbSender ? String(dbSender._id) : senderId,
         senderId: canonicalId,
         status: 'delivered',
       });
-    });
+    }
   }
 
   /**
