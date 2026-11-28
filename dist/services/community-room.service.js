@@ -10,6 +10,9 @@ class CommunityRoomService {
     roomRepo;
     userRepo;
     cachedRooms = [];
+    lastFetchAt = 0;
+    inFlightFetch = null;
+    ROOMS_CACHE_TTL_MS = 2500;
     constructor(roomRepo = community_room_repository_1.communityRoomRepository, userRepo = user_repository_1.userRepository) {
         this.roomRepo = roomRepo;
         this.userRepo = userRepo;
@@ -20,45 +23,72 @@ class CommunityRoomService {
     setCachedRooms(rooms) {
         this.cachedRooms = rooms;
     }
+    isUserRoomAdmin(roomId, userId) {
+        if (!roomId || !userId)
+            return false;
+        const cleanRoom = String(roomId).replace(/^circle_comm_/, '').toLowerCase();
+        const uid = String(userId).toLowerCase();
+        const room = this.cachedRooms.find((r) => String(r.roomId || r.id).toLowerCase() === cleanRoom || String(r.id).toLowerCase() === cleanRoom);
+        if (!room || !Array.isArray(room.admins))
+            return false;
+        return room.admins.some((a) => String(a).toLowerCase() === uid);
+    }
     async fetchCommunityRoomsWithCounts(force = false) {
-        try {
-            const [dbRooms, livekitCounts] = await Promise.all([
-                this.roomRepo.findAll(),
-                livekit_service_1.liveKitService.getRoomParticipantCounts(force),
-            ]);
-            const mappedRooms = dbRooms.map((r) => {
-                const rId = r.roomId || r.id;
-                const dbId = r._id ? r._id.toString() : '';
-                // Live count from LiveKit Cloud or in-memory CommunityRoomStore (0ms instant)
-                const localCount = room_store_service_1.communityRoomStoreService.getParticipantCount(rId);
-                const liveCount = Math.max((dbId ? livekitCounts.get(`circle_comm_${dbId}`) : 0) || 0, (rId ? livekitCounts.get(`circle_comm_${rId}`) : 0) || 0, (rId ? livekitCounts.get(rId) : 0) || 0, (dbId ? livekitCounts.get(dbId) : 0) || 0, localCount, 0);
-                return {
-                    id: rId,
-                    roomId: rId,
-                    name: r.name,
-                    teluguTitle: r.teluguTitle,
-                    language: r.language || 'Telugu',
-                    type: r.type || 'audio',
-                    topic: r.topic || '',
-                    avatar: r.avatar,
-                    isStopped: Boolean(r.isStopped),
-                    stoppedReason: r.stoppedReason || '',
-                    admins: r.admins || [],
-                    activeParticipants: liveCount,
-                    maxParticipants: r.maxParticipants || 50,
-                    costCoins: r.costCoins || 0,
-                    tags: r.tags || [],
-                };
-            });
-            if (mappedRooms.length > 0) {
-                this.cachedRooms = mappedRooms;
-            }
-            return mappedRooms;
-        }
-        catch (err) {
-            console.warn('[fetchCommunityRoomsWithCounts Error]:', err);
+        const now = Date.now();
+        if (!force && this.cachedRooms.length > 0 && now - this.lastFetchAt < this.ROOMS_CACHE_TTL_MS) {
             return this.cachedRooms;
         }
+        if (this.inFlightFetch) {
+            return this.inFlightFetch;
+        }
+        this.inFlightFetch = (async () => {
+            try {
+                const [dbRooms, livekitCounts] = await Promise.all([
+                    this.roomRepo.findAll(),
+                    livekit_service_1.liveKitService.getRoomParticipantCounts(force),
+                ]);
+                const mappedRooms = dbRooms.map((r) => {
+                    const rId = r.roomId || r.id;
+                    const dbId = r._id ? r._id.toString() : '';
+                    if (dbId && rId && dbId !== rId) {
+                        room_store_service_1.communityRoomStoreService.registerAlias(dbId, rId);
+                    }
+                    // Live count from LiveKit Cloud or in-memory CommunityRoomStore (0ms instant)
+                    const localCount = room_store_service_1.communityRoomStoreService.getParticipantCount(rId);
+                    const liveCount = Math.max((dbId ? livekitCounts.get(`circle_comm_${dbId}`) : 0) || 0, (rId ? livekitCounts.get(`circle_comm_${rId}`) : 0) || 0, (rId ? livekitCounts.get(rId) : 0) || 0, (dbId ? livekitCounts.get(dbId) : 0) || 0, localCount, 0);
+                    return {
+                        id: rId,
+                        roomId: rId,
+                        name: r.name,
+                        teluguTitle: r.teluguTitle,
+                        language: r.language || 'Telugu',
+                        type: r.type || 'audio',
+                        topic: r.topic || '',
+                        avatar: r.avatar,
+                        isStopped: Boolean(r.isStopped),
+                        stoppedReason: r.stoppedReason || '',
+                        admins: r.admins || [],
+                        activeParticipants: liveCount,
+                        maxParticipants: r.maxParticipants || 50,
+                        costCoins: r.costCoins || 0,
+                        tags: r.tags || [],
+                    };
+                });
+                if (mappedRooms.length > 0) {
+                    this.cachedRooms = mappedRooms;
+                    this.lastFetchAt = Date.now();
+                }
+                return mappedRooms;
+            }
+            catch (err) {
+                console.warn('[fetchCommunityRoomsWithCounts Error]:', err);
+                return this.cachedRooms;
+            }
+            finally {
+                this.inFlightFetch = null;
+            }
+        })();
+        return this.inFlightFetch;
     }
     async joinRoom(userId, roomId) {
         let room = await this.roomRepo.findByRoomId(roomId);
@@ -94,13 +124,19 @@ class CommunityRoomService {
         }
         // Register active participant in room session
         const targetRoomId = room.roomId || roomId;
+        if (room._id && targetRoomId) {
+            room_store_service_1.communityRoomStoreService.registerAlias(room._id.toString(), targetRoomId);
+        }
+        const uidStr = user._id.toString();
+        const isAdmin = Array.isArray(room.admins) &&
+            room.admins.some((a) => String(a).toLowerCase() === uidStr.toLowerCase());
         room_store_service_1.communityRoomStoreService.join(targetRoomId, {
-            id: user._id.toString(),
+            id: uidStr,
             name: user.name || user.handle || 'Member',
             teluguName: user.teluguName,
             handle: user.handle || 'member',
             avatar: user.avatar || '',
-            role: 'speaker',
+            role: isAdmin ? 'admin' : 'speaker',
             isMuted: false,
             isRestricted: false,
             isVideoOff: false,
@@ -152,6 +188,7 @@ class CommunityRoomService {
                 if (!participant || !participant.id) {
                     throw new Error('participant data required');
                 }
+                const isAdmin = this.isUserRoomAdmin(roomId, participant.id);
                 const result = room_store_service_1.communityRoomStoreService.join(roomId, {
                     id: participant.id,
                     name: participant.name || 'User',
@@ -159,7 +196,7 @@ class CommunityRoomService {
                     handle: participant.handle || 'user',
                     avatar: participant.avatar ||
                         'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop',
-                    role: participant.role || (room.participants.size === 0 ? 'host' : 'speaker'),
+                    role: isAdmin ? 'admin' : (participant.role || (room.participants.size === 0 ? 'host' : 'speaker')),
                     isMuted: Boolean(participant.isMuted),
                     isRestricted: false,
                     isVideoOff: Boolean(participant.isVideoOff),

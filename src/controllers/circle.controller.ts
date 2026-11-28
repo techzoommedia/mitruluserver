@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { JWT_SECRET, LIVEKIT_URL } from '../config/env';
+import { extractAuthToken, verifyAuthToken } from '../middleware/auth.middleware';
 import { userService } from '../services/user.service';
 import { communityRoomService } from '../services/community-room.service';
 import { communityRoomStoreService } from '../services/room-store.service';
@@ -319,17 +320,24 @@ export class CircleController {
 
   async updateActiveStatus(req: Request, res: Response): Promise<void> {
     try {
-      const token = req.headers.authorization?.startsWith('Bearer ')
-        ? req.headers.authorization.slice(7)
-        : null;
+      const authHeader = req.headers.authorization;
+      const bodyToken = typeof req.body?.token === 'string' ? req.body.token : null;
+      const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : bodyToken;
 
       if (!token) {
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
 
-      const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-      const uid = decoded.userId || decoded.id || decoded._id;
+      let uid: string | undefined;
+      try {
+        const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+        uid = decoded.userId || decoded.id || decoded._id;
+      } catch {
+        res.status(401).json({ error: 'Invalid or expired token' });
+        return;
+      }
+
       if (!uid) {
         res.status(401).json({ error: 'User identifier missing in token' });
         return;
@@ -548,15 +556,12 @@ export class CircleController {
   }
 
   private extractAuthUserId(req: Request): string | undefined {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const token = extractAuthToken(req);
     if (!token) return undefined;
-    try {
-      const decoded: any = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-      return decoded.userId || decoded.id || decoded._id;
-    } catch {
-      return undefined;
-    }
+    const decoded = verifyAuthToken(token);
+    if (!decoded) return undefined;
+    const uid = decoded.userId || decoded.id || decoded._id;
+    return uid ? String(uid) : undefined;
   }
 
   async getIncomingCall(req: Request, res: Response): Promise<void> {

@@ -62,6 +62,7 @@ class GroupMessageService {
                 heldAt: grp.heldAt ? new Date(grp.heldAt).toISOString() : null,
                 heldBy: grp.heldBy,
                 rules: grp.rules,
+                admins: grp.admins || [],
                 memberCount,
                 lastMessage: latestMsg
                     ? {
@@ -100,19 +101,37 @@ class GroupMessageService {
         }
         const messageId = dto.id || `gmsg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
         const timestamp = dto.timestamp || Date.now();
-        const created = await group_message_repository_1.groupMessageRepository.createMessage({
-            id: messageId,
-            groupId: targetGroupId,
-            senderId: dto.senderId,
-            senderName: dto.senderName || 'Mitrulu Member',
-            senderAvatar: dto.senderAvatar || '',
-            senderHandle: dto.senderHandle || '',
-            senderTeluguName: dto.senderTeluguName || '',
-            text: dto.text,
-            mediaUrl: dto.mediaUrl || '',
-            mediaType: dto.mediaType,
-            timestamp,
-        });
+        // Idempotency guard: if client sent the same message ID over both socket and REST, return existing
+        if (dto.id) {
+            const existing = await group_message_repository_1.groupMessageRepository.findMessageById(messageId);
+            if (existing) {
+                return existing;
+            }
+        }
+        let created;
+        try {
+            created = await group_message_repository_1.groupMessageRepository.createMessage({
+                id: messageId,
+                groupId: targetGroupId,
+                senderId: dto.senderId,
+                senderName: dto.senderName || 'Mitrulu Member',
+                senderAvatar: dto.senderAvatar || '',
+                senderHandle: dto.senderHandle || '',
+                senderTeluguName: dto.senderTeluguName || '',
+                text: dto.text,
+                mediaUrl: dto.mediaUrl || '',
+                mediaType: dto.mediaType,
+                timestamp,
+            });
+        }
+        catch (err) {
+            if (err?.code === 11000 && dto.id) {
+                const existing = await group_message_repository_1.groupMessageRepository.findMessageById(messageId);
+                if (existing)
+                    return existing;
+            }
+            throw err;
+        }
         const serialized = created.toObject ? created.toObject() : created;
         // Real-time broadcast to all connected clients in the group room
         try {
@@ -255,8 +274,25 @@ class GroupMessageService {
             const memberCount = grp.isPublic
                 ? Math.max(totalUsers, grp.customMemberCount || 1)
                 : Math.max(uniqueParticipants.length, grp.customMemberCount || 1);
+            const adminIds = Array.isArray(grp.admins) ? grp.admins : [];
+            let adminUsers = [];
+            if (adminIds.length > 0) {
+                const foundAdmins = await user_model_1.UserModel.find({ _id: { $in: adminIds } })
+                    .select('_id name teluguName handle mitraId avatar')
+                    .lean()
+                    .catch(() => []);
+                adminUsers = foundAdmins.map((u) => ({
+                    id: u._id.toString(),
+                    name: u.name || 'Admin',
+                    teluguName: u.teluguName,
+                    handle: u.mitraId || u.handle || '',
+                    avatar: u.avatar || '',
+                }));
+            }
             return {
                 ...grp,
+                admins: adminIds,
+                adminUsers,
                 totalMessages,
                 uniqueParticipantsCount: uniqueParticipants.length,
                 memberCount,
@@ -319,6 +355,54 @@ class GroupMessageService {
             group.rules = data.rules.trim();
         if (data.customMemberCount !== undefined)
             group.customMemberCount = Number(data.customMemberCount);
+        await group.save();
+        try {
+            socket_manager_1.socketManager.getIO().emit('group:updated', { group: group.toObject() });
+        }
+        catch { }
+        return group;
+    }
+    /**
+     * Admin: Promote a user (by ID, handle, or mitraId) to Group Admin
+     */
+    async promoteAdmin(groupId, identifier) {
+        const slug = groupId.toLowerCase().trim();
+        const cleanTarget = String(identifier || '').trim().replace(/^@/, '');
+        if (!cleanTarget) {
+            throw new Error('User ID, @handle, or Mitra ID is required');
+        }
+        const group = await chat_group_model_1.ChatGroupModel.findOne({ id: slug });
+        if (!group) {
+            throw new Error(`Group "${groupId}" not found`);
+        }
+        const dbUser = await message_service_1.messageService.resolveUser(cleanTarget);
+        if (!dbUser || !dbUser._id) {
+            throw new Error(`User "${cleanTarget}" not found`);
+        }
+        const resolvedId = dbUser._id.toString();
+        const admins = Array.isArray(group.admins) ? [...group.admins] : [];
+        if (!admins.includes(resolvedId)) {
+            admins.push(resolvedId);
+            group.admins = admins;
+            await group.save();
+        }
+        try {
+            socket_manager_1.socketManager.getIO().emit('group:updated', { group: group.toObject() });
+        }
+        catch { }
+        return group;
+    }
+    /**
+     * Admin: Remove a user from Group Admins
+     */
+    async removeAdmin(groupId, targetUserId) {
+        const slug = groupId.toLowerCase().trim();
+        const cleanTarget = String(targetUserId || '').trim();
+        const group = await chat_group_model_1.ChatGroupModel.findOne({ id: slug });
+        if (!group) {
+            throw new Error(`Group "${groupId}" not found`);
+        }
+        group.admins = (group.admins || []).filter((id) => String(id) !== cleanTarget);
         await group.save();
         try {
             socket_manager_1.socketManager.getIO().emit('group:updated', { group: group.toObject() });
@@ -420,10 +504,13 @@ class GroupMessageService {
                 .limit(limit)
                 .lean(),
         ]);
+        const grp = await chat_group_model_1.ChatGroupModel.findOne({ id: slug }).select('admins').lean().catch(() => null);
+        const groupAdminSet = new Set((grp?.admins || []).map((a) => String(a).toLowerCase()));
         const members = dbUsers.map((u) => {
             const uid = u._id ? u._id.toString() : '';
             const handleClean = (u.handle || u.mitraId || '').toLowerCase();
             const isOnline = onlineUserIds.has(uid.toLowerCase()) || (handleClean ? onlineUserIds.has(handleClean) : false);
+            const isGroupAdmin = groupAdminSet.has(uid.toLowerCase()) || Boolean(u.isAdmin) || u.role === 'admin';
             return {
                 id: uid,
                 _id: uid,
@@ -436,7 +523,7 @@ class GroupMessageService {
                 teluguBio: u.teluguBio || '',
                 location: u.location || 'హైదరాబాద్',
                 isVerified: Boolean(u.isVerified),
-                role: u.isAdmin || u.role === 'admin' ? 'admin' : 'member',
+                role: isGroupAdmin ? 'admin' : 'member',
                 isOnline,
                 lastSeen: u.lastSeen || null,
                 joinedAt: u.createdAt || null,

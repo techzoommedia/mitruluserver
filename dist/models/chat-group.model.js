@@ -49,6 +49,7 @@ exports.ChatGroupSchema = new mongoose_1.Schema({
     heldBy: { type: String, default: '' },
     rules: { type: String, default: '' },
     customMemberCount: { type: Number, default: 0 },
+    admins: { type: [String], default: [] },
 }, {
     collection: 'chat_groups',
     timestamps: true,

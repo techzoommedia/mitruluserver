@@ -19,6 +19,24 @@ class CallSessionRepository {
             return null;
         return call_session_model_1.CallSessionModel.findOne({ $or: filters });
     }
+    async findActiveIncomingCall(targetUserId) {
+        const threeMinutesAgo = new Date(Date.now() - 180_000);
+        return call_session_model_1.CallSessionModel.findOne({
+            targetUserId: { $in: [targetUserId, String(targetUserId)] },
+            status: 'ringing',
+            createdAt: { $gte: threeMinutesAgo },
+        }).sort({ createdAt: -1 });
+    }
+    async findLatestRingingSession(callerId, targetUserId) {
+        const query = {
+            callerId: { $in: [callerId, String(callerId)] },
+            status: 'ringing',
+        };
+        if (targetUserId) {
+            query.targetUserId = { $in: [targetUserId, String(targetUserId)] };
+        }
+        return call_session_model_1.CallSessionModel.findOne(query).sort({ createdAt: -1 });
+    }
     async updateStatus(callId, status, extra = {}) {
         return call_session_model_1.CallSessionModel.findOneAndUpdate({ callId }, { status, ...extra }, { new: true });
     }

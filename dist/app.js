@@ -10,6 +10,7 @@ const env_1 = require("./config/env");
 const routes_1 = __importDefault(require("./routes"));
 function createApp() {
     const app = (0, express_1.default)();
+    app.set('trust proxy', 1);
     app.use((0, cors_1.default)({
         origin: (origin, callback) => {
             if (!origin || env_1.ALLOWED_ORIGINS.includes(origin) || env_1.ALLOWED_ORIGINS.includes('*')) {

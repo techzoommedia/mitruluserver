@@ -18,12 +18,12 @@ const server = http_1.default.createServer(app);
 exports.server = server;
 // Initialize Socket.IO with all signaling & authentication handlers
 socket_manager_1.socketManager.initialize(server);
-// Periodic background sync for community rooms (every 3s broadcast to all sockets)
+// Periodic background reconciliation for community rooms (10s interval; joins/leaves broadcast at 0ms)
 const roomsBroadcastInterval = setInterval(async () => {
-    if (socket_manager_1.socketManager.getActiveSocketsCount() > 0) {
+    if (mongoose_1.default.connection.readyState === 1 && socket_manager_1.socketManager.getActiveSocketsCount() > 0) {
         await socket_manager_1.socketManager.broadcastCommunityRooms();
     }
-}, 3000);
+}, 10000);
 let isShuttingDown = false;
 let listenRetries = 0;
 const MAX_LISTEN_RETRIES = 10;
@@ -35,7 +35,7 @@ server.on('error', (err) => {
         setTimeout(() => {
             if (!isShuttingDown) {
                 server.close();
-                server.listen(env_1.PORT);
+                server.listen(env_1.PORT, '0.0.0.0');
             }
         }, waitMs);
     }
@@ -47,7 +47,7 @@ server.on('error', (err) => {
     }
 });
 async function startServer() {
-    server.listen(env_1.PORT, () => {
+    server.listen(env_1.PORT, '0.0.0.0', () => {
         listenRetries = 0;
         console.log(`[Mitrulu Server] Real-Time Circle Server running on port ${env_1.PORT}`);
         console.log(`[Mitrulu Server] WebSocket URL: ws://localhost:${env_1.PORT}`);

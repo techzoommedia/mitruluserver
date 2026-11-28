@@ -233,6 +233,26 @@ class UserService {
         if (callCategory)
             updateFields.callCategory = callCategory;
         const user = await this.userRepo.updateUser(uid, updateFields);
+        if (activeState && user) {
+            this.setCacheUser(uid, {
+                name: user.name || clientUser?.name,
+                teluguName: user.teluguName || clientUser?.teluguName,
+                handle: user.mitraId || user.handle || clientUser?.handle,
+                mitraId: user.mitraId || user.handle,
+                avatar: user.avatar || clientUser?.avatar || '',
+                bio: user.bio || clientUser?.bio,
+                teluguBio: user.teluguBio || clientUser?.teluguBio,
+                location: user.location || clientUser?.location,
+                isVerified: user.isVerified ?? clientUser?.isVerified,
+                gender: user.gender || gender,
+                profession: user.profession || profession,
+                callCategory: user.callCategory || callCategory,
+                callLanguage: user.callLanguage || callLanguage,
+                callRating: user.callRating ?? 5.0,
+                callRatingCount: user.callRatingCount ?? 1,
+                callRateCoins: user.callRateCoins ?? 1,
+            });
+        }
         return user;
     }
 }

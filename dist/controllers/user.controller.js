@@ -205,7 +205,7 @@ class UserController {
                 res.status(401).json({ error: 'Authentication required' });
                 return;
             }
-            const { name, teluguName, bio, teluguBio, location, avatar, interests, handle, mitraId } = req.body;
+            const { name, teluguName, bio, teluguBio, location, avatar, interests, handle, mitraId, isShielded, gender, profession, callLanguage, callRateCoins, } = req.body;
             const updateData = {};
             if (name)
                 updateData.name = name.trim();
@@ -215,10 +215,20 @@ class UserController {
                 updateData.bio = bio;
             if (teluguBio !== undefined)
                 updateData.teluguBio = teluguBio;
-            if (location)
+            if (location !== undefined)
                 updateData.location = location;
-            if (avatar)
+            if (avatar !== undefined)
                 updateData.avatar = avatar;
+            if (isShielded !== undefined)
+                updateData.isShielded = Boolean(isShielded);
+            if (gender !== undefined)
+                updateData.gender = gender;
+            if (profession !== undefined)
+                updateData.profession = profession;
+            if (callLanguage !== undefined)
+                updateData.callLanguage = callLanguage;
+            if (callRateCoins !== undefined)
+                updateData.callRateCoins = Number(callRateCoins);
             if (Array.isArray(interests))
                 updateData.interests = interests;
             if (mitraId || handle) {

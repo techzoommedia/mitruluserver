@@ -6,8 +6,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.circleController = exports.CircleController = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const env_1 = require("../config/env");
+const auth_middleware_1 = require("../middleware/auth.middleware");
 const user_service_1 = require("../services/user.service");
 const community_room_service_1 = require("../services/community-room.service");
+const room_store_service_1 = require("../services/room-store.service");
 const socket_manager_1 = require("../sockets/socket.manager");
 const push_service_1 = require("../services/push.service");
 const community_room_model_1 = require("../models/community-room.model");
@@ -58,6 +60,32 @@ class CircleController {
                 return;
             }
             const result = await community_room_service_1.communityRoomService.joinRoom(userId, roomId);
+            // Instant 0ms broadcast to room socket listeners
+            const canonicalRoom = room_store_service_1.communityRoomStoreService.getCanonicalId(roomId);
+            const sorted = room_store_service_1.communityRoomStoreService.getSortedParticipants(roomId);
+            const joinedPayload = {
+                roomId,
+                participant: {
+                    id: userId,
+                    role: 'speaker',
+                    isMuted: false,
+                    isVideoOff: false,
+                },
+                participants: sorted,
+                memberCount: sorted.length,
+            };
+            socket_manager_1.socketManager.emitToRoom(`community_${roomId}`, 'community:participant_joined', joinedPayload);
+            socket_manager_1.socketManager.emitToRoom(`circle_comm_${roomId}`, 'community:participant_joined', joinedPayload);
+            if (canonicalRoom && canonicalRoom !== roomId) {
+                socket_manager_1.socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:participant_joined', {
+                    ...joinedPayload,
+                    roomId: canonicalRoom,
+                });
+                socket_manager_1.socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'community:participant_joined', {
+                    ...joinedPayload,
+                    roomId: canonicalRoom,
+                });
+            }
             socket_manager_1.socketManager.broadcastCommunityRooms().catch(() => { });
             res.json(result);
         }
@@ -69,10 +97,22 @@ class CircleController {
     getRoomActions(req, res) {
         try {
             const roomId = req.query.roomId;
-            const userId = req.query.userId;
+            let userId = req.query.userId;
             if (!roomId) {
                 res.status(400).json({ error: 'roomId is required' });
                 return;
+            }
+            if (!userId) {
+                const token = req.headers.authorization?.startsWith('Bearer ')
+                    ? req.headers.authorization.slice(7)
+                    : null;
+                if (token) {
+                    try {
+                        const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
+                        userId = decoded.userId || decoded.id;
+                    }
+                    catch { }
+                }
             }
             const data = community_room_service_1.communityRoomService.getRoomActions(roomId, userId);
             res.json(data);
@@ -83,17 +123,76 @@ class CircleController {
     }
     postRoomActions(req, res) {
         try {
+            const token = req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.slice(7)
+                : null;
+            let decodedUserId;
+            let decodedUser;
+            if (token) {
+                try {
+                    const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
+                    decodedUserId = decoded.userId || decoded.id || decoded._id;
+                    decodedUser = decoded;
+                }
+                catch { }
+            }
+            if (!req.body.actorUserId && decodedUserId) {
+                req.body.actorUserId = decodedUserId;
+            }
+            if (req.body.action === 'join' && (!req.body.participant || !req.body.participant.id)) {
+                const uid = req.body.targetUserId || req.body.actorUserId || decodedUserId;
+                if (uid) {
+                    req.body.participant = {
+                        id: uid,
+                        name: decodedUser?.name || req.body.targetUserName || 'Member',
+                        teluguName: decodedUser?.teluguName,
+                        handle: decodedUser?.handle || 'member',
+                        avatar: decodedUser?.avatar || '',
+                        role: 'speaker',
+                    };
+                }
+            }
             const result = community_room_service_1.communityRoomService.handleRoomAction(req.body);
             const { roomId, action, actorUserId, targetUserId } = req.body;
-            // Broadcast to room sockets in 0ms
-            socket_manager_1.socketManager.emitToRoom(`community_${roomId}`, 'community:action', {
+            const uid = targetUserId || actorUserId || decodedUserId;
+            const actionPayload = {
                 roomId,
                 action,
                 actorUserId,
                 targetUserId,
+                userId: uid,
                 memberCount: result.memberCount,
                 participants: result.participants,
-            });
+            };
+            const leftPayload = {
+                roomId,
+                userId: uid,
+                targetUserId: uid,
+                memberCount: result.memberCount,
+                participants: result.participants,
+            };
+            // Broadcast to room sockets in 0ms across all room channel formats
+            socket_manager_1.socketManager.emitToRoom(`community_${roomId}`, 'community:action', actionPayload);
+            socket_manager_1.socketManager.emitToRoom(`circle_comm_${roomId}`, 'community:action', actionPayload);
+            socket_manager_1.socketManager.emitToRoom(roomId, 'community:action', actionPayload);
+            if (action === 'leave' || action === 'remove' || action === 'terminate') {
+                socket_manager_1.socketManager.emitToRoom(`community_${roomId}`, 'community:participant_left', leftPayload);
+                socket_manager_1.socketManager.emitToRoom(`circle_comm_${roomId}`, 'community:participant_left', leftPayload);
+                socket_manager_1.socketManager.emitToRoom(roomId, 'community:participant_left', leftPayload);
+                socket_manager_1.socketManager.emitToRoom(`circle_comm_${roomId}`, 'call:peer_left', { roomName: `circle_comm_${roomId}`, userId: uid });
+                socket_manager_1.socketManager.emitToRoom(`community_${roomId}`, 'call:peer_left', { roomName: `circle_comm_${roomId}`, userId: uid });
+            }
+            const canonicalRoom = room_store_service_1.communityRoomStoreService.getCanonicalId(roomId);
+            if (canonicalRoom && canonicalRoom !== roomId) {
+                socket_manager_1.socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:action', { ...actionPayload, roomId: canonicalRoom });
+                socket_manager_1.socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'community:action', { ...actionPayload, roomId: canonicalRoom });
+                socket_manager_1.socketManager.emitToRoom(canonicalRoom, 'community:action', { ...actionPayload, roomId: canonicalRoom });
+                if (action === 'leave' || action === 'remove' || action === 'terminate') {
+                    socket_manager_1.socketManager.emitToRoom(`community_${canonicalRoom}`, 'community:participant_left', { ...leftPayload, roomId: canonicalRoom });
+                    socket_manager_1.socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'community:participant_left', { ...leftPayload, roomId: canonicalRoom });
+                    socket_manager_1.socketManager.emitToRoom(`circle_comm_${canonicalRoom}`, 'call:peer_left', { roomName: `circle_comm_${canonicalRoom}`, userId: uid });
+                }
+            }
             socket_manager_1.socketManager.broadcastCommunityRooms().catch(() => { });
             res.json(result);
         }
@@ -214,15 +313,26 @@ class CircleController {
     }
     async updateActiveStatus(req, res) {
         try {
-            const token = req.headers.authorization?.startsWith('Bearer ')
-                ? req.headers.authorization.slice(7)
-                : null;
+            const authHeader = req.headers.authorization;
+            const bodyToken = typeof req.body?.token === 'string' ? req.body.token : null;
+            const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : bodyToken;
             if (!token) {
                 res.status(401).json({ error: 'Unauthorized' });
                 return;
             }
-            const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
-            const uid = decoded.userId;
+            let uid;
+            try {
+                const decoded = jsonwebtoken_1.default.verify(token, env_1.JWT_SECRET, { algorithms: ['HS256'] });
+                uid = decoded.userId || decoded.id || decoded._id;
+            }
+            catch {
+                res.status(401).json({ error: 'Invalid or expired token' });
+                return;
+            }
+            if (!uid) {
+                res.status(401).json({ error: 'User identifier missing in token' });
+                return;
+            }
             const user = await user_service_1.userService.updateActiveStatusViaHttp(uid, req.body);
             socket_manager_1.socketManager.broadcastActiveUsersInstant();
             res.json({
@@ -270,9 +380,15 @@ class CircleController {
                     userName = u.name;
             }
             const effectiveRoomName = roomName || callId;
+            const strippedRoomName = effectiveRoomName.replace(/^circle_comm_/, '');
             // 1. Check if Community Room
             const communityRoom = await community_room_model_1.CommunityRoomModel.findOne({
-                $or: [{ roomId: effectiveRoomName }, { name: effectiveRoomName }],
+                $or: [
+                    { roomId: effectiveRoomName },
+                    { roomId: strippedRoomName },
+                    { name: effectiveRoomName },
+                    { name: strippedRoomName },
+                ],
             }).lean();
             if (communityRoom) {
                 if (communityRoom.isStopped) {
@@ -282,12 +398,15 @@ class CircleController {
                     });
                     return;
                 }
-                const liveKitToken = await livekit_service_1.liveKitService.generateToken(userId, userName, communityRoom.roomId);
+                const canonicalLiveKitRoom = effectiveRoomName.startsWith('circle_comm_')
+                    ? effectiveRoomName
+                    : `circle_comm_${communityRoom.roomId}`;
+                const liveKitToken = await livekit_service_1.liveKitService.generateToken(userId, userName, canonicalLiveKitRoom);
                 res.json({
                     success: true,
                     token: liveKitToken,
                     serverUrl: env_1.LIVEKIT_URL,
-                    roomName: communityRoom.roomId,
+                    roomName: canonicalLiveKitRoom,
                     isCommunity: true,
                     callType: communityRoom.type || 'audio',
                     room: communityRoom,
@@ -408,6 +527,184 @@ class CircleController {
         catch (err) {
             console.error('[getCallHistory error]:', err);
             res.status(500).json({ success: false, error: err.message || 'Failed to fetch call history' });
+        }
+    }
+    extractAuthUserId(req) {
+        const token = (0, auth_middleware_1.extractAuthToken)(req);
+        if (!token)
+            return undefined;
+        const decoded = (0, auth_middleware_1.verifyAuthToken)(token);
+        if (!decoded)
+            return undefined;
+        const uid = decoded.userId || decoded.id || decoded._id;
+        return uid ? String(uid) : undefined;
+    }
+    async getIncomingCall(req, res) {
+        try {
+            const userId = this.extractAuthUserId(req);
+            if (!userId) {
+                res.json({ success: true, hasIncomingCall: false, call: null });
+                return;
+            }
+            const session = await call_session_repository_1.callSessionRepository.findActiveIncomingCall(userId);
+            if (!session) {
+                res.json({ success: true, hasIncomingCall: false, call: null });
+                return;
+            }
+            res.json({
+                success: true,
+                hasIncomingCall: true,
+                call: {
+                    callId: session.callId,
+                    callerId: session.callerId,
+                    callerName: session.callerName,
+                    callerTeluguName: session.callerTeluguName,
+                    callerHandle: session.callerHandle,
+                    callerAvatar: session.callerAvatar,
+                    roomName: session.roomName,
+                    callType: session.callType,
+                    caller: {
+                        id: session.callerId,
+                        name: session.callerName,
+                        teluguName: session.callerTeluguName,
+                        handle: session.callerHandle,
+                        avatar: session.callerAvatar,
+                    },
+                },
+            });
+        }
+        catch (err) {
+            console.warn('[getIncomingCall error]:', err?.message || err);
+            res.json({ success: false, hasIncomingCall: false, call: null });
+        }
+    }
+    async getCallRespondStatus(req, res) {
+        try {
+            const callId = req.query.callId;
+            if (!callId) {
+                res.status(400).json({ success: false, error: 'callId is required' });
+                return;
+            }
+            const session = await call_session_repository_1.callSessionRepository.findByCallId(callId);
+            if (!session) {
+                res.json({ success: false, error: 'Call session not found' });
+                return;
+            }
+            res.json({ success: true, status: session.status, callId: session.callId, roomName: session.roomName });
+        }
+        catch (err) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to check call status' });
+        }
+    }
+    async respondToCallHttp(req, res) {
+        try {
+            const { callId, action } = req.body || {};
+            if (!callId || (action !== 'accept' && action !== 'decline')) {
+                res.status(400).json({ success: false, error: 'Valid callId and action (accept|decline) are required' });
+                return;
+            }
+            const response = await call_service_1.callService.respondToCall(callId, action);
+            if (response.action === 'accept') {
+                socket_manager_1.socketManager.emitToUser(response.session.callerId, 'call:accepted', {
+                    callId,
+                    roomName: response.session.roomName,
+                    token: response.callerToken,
+                    serverUrl: response.serverUrl,
+                    callType: response.session.callType,
+                });
+                res.json({
+                    success: true,
+                    callId,
+                    roomName: response.session.roomName,
+                    token: response.receiverToken,
+                    serverUrl: response.serverUrl,
+                    callType: response.session.callType,
+                });
+            }
+            else {
+                socket_manager_1.socketManager.emitToUser(response.session.callerId, 'call:declined', {
+                    callId,
+                    message: response.message,
+                });
+                res.json({ success: true, declined: true });
+            }
+        }
+        catch (err) {
+            console.error('[respondToCallHttp error]:', err);
+            res.status(400).json({ success: false, error: err?.message || 'Failed to respond to call' });
+        }
+    }
+    async startCallHttp(req, res) {
+        try {
+            const callerId = this.extractAuthUserId(req);
+            if (!callerId) {
+                res.status(401).json({ success: false, error: 'Unauthorized' });
+                return;
+            }
+            const { targetUserId, callType = 'audio' } = req.body || {};
+            const result = await call_service_1.callService.startCall(callerId, targetUserId, callType);
+            socket_manager_1.socketManager.emitToUser(targetUserId, 'call:incoming', result.incomingPayload);
+            (0, push_service_1.sendIncomingCallPush)({
+                targetUserId: String(targetUserId),
+                callerId: result.incomingPayload.caller.id,
+                callerName: result.incomingPayload.caller.name,
+                callerAvatar: result.incomingPayload.caller.avatar,
+                callType: result.incomingPayload.callType,
+                callId: result.incomingPayload.callId,
+                roomName: result.incomingPayload.roomName,
+            }).catch(() => { });
+            const caller = await user_service_1.userService.getUserById(callerId).catch(() => null);
+            res.json({
+                ...result.callerResponse,
+                serverUrl: env_1.LIVEKIT_URL,
+                costCoins: result.costCoins,
+                remainingCoins: caller?.coins,
+            });
+        }
+        catch (err) {
+            const status = err?.insufficientCoins ? 402 : err?.isOffline ? 400 : 400;
+            res.status(status).json({
+                success: false,
+                error: err?.message || 'Call failed to initiate',
+                insufficientCoins: Boolean(err?.insufficientCoins),
+                isOffline: Boolean(err?.isOffline),
+            });
+        }
+    }
+    async timeoutCallHttp(req, res) {
+        try {
+            const callerId = this.extractAuthUserId(req);
+            if (!callerId) {
+                res.status(401).json({ success: false, error: 'Unauthorized' });
+                return;
+            }
+            const { targetUserId, callId, reason } = req.body || {};
+            const session = callId
+                ? await call_session_repository_1.callSessionRepository.findByCallId(callId)
+                : await call_session_repository_1.callSessionRepository.findLatestRingingSession(callerId, targetUserId);
+            if (session && session.status === 'ringing') {
+                const target = await user_service_1.userService.getUserById(session.targetUserId).catch(() => null);
+                const costCoins = target?.callRateCoins || 500;
+                await call_service_1.callService.handleTimeout(session.callId, costCoins);
+                socket_manager_1.socketManager.emitToUser(callerId, 'call:timeout', {
+                    callId: session.callId,
+                    message: 'కాల్ స్వీకరించబడలేదు. నాణేలు రీఫండ్ చేయబడ్డాయి (Call timed out, coins refunded).',
+                });
+                socket_manager_1.socketManager.emitToUser(session.targetUserId, 'call:timeout', { callId: session.callId });
+            }
+            if (reason === 'not_taken_within_3_min' && targetUserId) {
+                await user_service_1.userService.toggleActiveStatus(targetUserId, { isCallActive: false }).catch(() => { });
+                socket_manager_1.socketManager.broadcastActiveUsersInstant();
+            }
+            const updatedCaller = await user_service_1.userService.getUserById(callerId).catch(() => null);
+            res.json({
+                success: true,
+                remainingCoins: updatedCaller?.coins,
+            });
+        }
+        catch (err) {
+            console.error('[timeoutCallHttp error]:', err);
+            res.status(500).json({ success: false, error: err?.message || 'Failed to timeout call' });
         }
     }
     async endCallHttp(req, res) {

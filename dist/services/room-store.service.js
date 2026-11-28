@@ -1,18 +1,45 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.communityRoomStoreService = exports.CommunityRoomStoreService = void 0;
-const PARTICIPANT_STALE_TIMEOUT_MS = 25000;
+const PARTICIPANT_STALE_TIMEOUT_MS = 45000;
 class CommunityRoomStoreService {
     rooms = new Map();
+    roomAliases = new Map();
+    registerAlias(alias, canonicalRoomId) {
+        if (alias && canonicalRoomId && alias !== canonicalRoomId) {
+            this.roomAliases.set(alias, canonicalRoomId);
+            // If data was already placed in alias room, merge it into canonical room
+            if (this.rooms.has(alias)) {
+                const aliasRoom = this.rooms.get(alias);
+                const canonicalRoom = this.getOrCreateRoom(canonicalRoomId, aliasRoom.adminId);
+                for (const [uid, p] of aliasRoom.participants.entries()) {
+                    canonicalRoom.participants.set(uid, p);
+                }
+                for (const buid of aliasRoom.blockedUserIds) {
+                    canonicalRoom.blockedUserIds.add(buid);
+                }
+                this.rooms.delete(alias);
+            }
+        }
+    }
+    getCanonicalId(roomId) {
+        const clean = String(roomId || '').replace(/^circle_comm_/, '');
+        return this.roomAliases.get(clean) || this.roomAliases.get(roomId) || clean;
+    }
+    resolveRoomId(roomId) {
+        const clean = String(roomId || '').replace(/^circle_comm_/, '');
+        return this.roomAliases.get(clean) || this.roomAliases.get(roomId) || clean;
+    }
     getOrCreateRoom(roomId, initialAdminId) {
-        if (!this.rooms.has(roomId)) {
-            this.rooms.set(roomId, {
+        const rId = this.resolveRoomId(roomId);
+        if (!this.rooms.has(rId)) {
+            this.rooms.set(rId, {
                 participants: new Map(),
                 blockedUserIds: new Set(),
                 adminId: initialAdminId || '',
             });
         }
-        const room = this.rooms.get(roomId);
+        const room = this.rooms.get(rId);
         if (initialAdminId && !room.adminId) {
             room.adminId = initialAdminId;
         }
@@ -27,7 +54,8 @@ class CommunityRoomStoreService {
         }
     }
     getRoom(roomId, callerUserId, initialAdminId) {
-        const room = this.getOrCreateRoom(roomId, initialAdminId);
+        const rId = this.resolveRoomId(roomId);
+        const room = this.getOrCreateRoom(rId, initialAdminId);
         if (callerUserId && room.participants.has(callerUserId)) {
             room.participants.get(callerUserId).lastSeen = Date.now();
         }
@@ -35,7 +63,8 @@ class CommunityRoomStoreService {
         return room;
     }
     join(roomId, participant) {
-        const room = this.getOrCreateRoom(roomId, participant.id);
+        const rId = this.resolveRoomId(roomId);
+        const room = this.getOrCreateRoom(rId, participant.id);
         if (room.blockedUserIds.has(participant.id)) {
             return { success: false, isBlocked: true, error: 'User is blocked from this room' };
         }
@@ -50,17 +79,39 @@ class CommunityRoomStoreService {
         return { success: true, participant: full, room };
     }
     leave(roomId, userId) {
-        if (this.rooms.has(roomId)) {
-            const room = this.rooms.get(roomId);
-            room.participants.delete(userId);
+        if (!roomId || !userId)
+            return;
+        const rId = this.resolveRoomId(roomId);
+        const cleanUid = String(userId);
+        if (this.rooms.has(rId)) {
+            const room = this.rooms.get(rId);
+            room.participants.delete(cleanUid);
+            for (const [id, p] of room.participants.entries()) {
+                if (id === cleanUid || p.id === cleanUid || (p.handle && p.handle === cleanUid)) {
+                    room.participants.delete(id);
+                }
+            }
             this.pruneStale(room);
         }
     }
     removeUserFromAllRooms(userId) {
         const affectedRooms = [];
+        if (!userId)
+            return affectedRooms;
+        const cleanUid = String(userId);
         for (const [roomId, room] of this.rooms.entries()) {
-            if (room.participants.has(userId)) {
-                room.participants.delete(userId);
+            let removed = false;
+            if (room.participants.has(cleanUid)) {
+                room.participants.delete(cleanUid);
+                removed = true;
+            }
+            for (const [id, p] of room.participants.entries()) {
+                if (id === cleanUid || p.id === cleanUid || (p.handle && p.handle === cleanUid)) {
+                    room.participants.delete(id);
+                    removed = true;
+                }
+            }
+            if (removed) {
                 this.pruneStale(room);
                 affectedRooms.push(roomId);
             }
@@ -69,29 +120,35 @@ class CommunityRoomStoreService {
     }
     heartbeat(roomId, userId) {
         if (!roomId)
-            return;
-        const room = this.getOrCreateRoom(roomId);
+            return false;
+        const rId = this.resolveRoomId(roomId);
+        const room = this.getOrCreateRoom(rId);
+        let found = false;
         if (userId && room.participants.has(userId)) {
             room.participants.get(userId).lastSeen = Date.now();
+            found = true;
         }
         this.pruneStale(room);
+        return found;
     }
     getParticipantCount(roomId) {
-        if (!this.rooms.has(roomId))
+        const rId = this.resolveRoomId(roomId);
+        if (!this.rooms.has(rId))
             return 0;
-        const room = this.rooms.get(roomId);
+        const room = this.rooms.get(rId);
         this.pruneStale(room);
         return room.participants.size;
     }
     getSortedParticipants(roomId, callerUserId) {
         const room = this.getRoom(roomId, callerUserId);
         const list = Array.from(room.participants.values());
-        const priority = { host: 0, speaker: 1, listener: 2 };
-        return list.sort((a, b) => (priority[a.role] ?? 3) - (priority[b.role] ?? 3));
+        const priority = { admin: 0, host: 1, speaker: 2, listener: 3 };
+        return list.sort((a, b) => (priority[a.role] ?? 4) - (priority[b.role] ?? 4));
     }
     clearRoom(roomId) {
-        if (this.rooms.has(roomId)) {
-            this.rooms.get(roomId).participants.clear();
+        const rId = this.resolveRoomId(roomId);
+        if (this.rooms.has(rId)) {
+            this.rooms.get(rId).participants.clear();
         }
     }
 }

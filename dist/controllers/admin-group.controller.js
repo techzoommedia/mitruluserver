@@ -55,12 +55,59 @@ class AdminGroupController {
                 res.status(400).json({ success: false, error: 'groupId is required' });
                 return;
             }
+            const { action, targetUserId } = req.body || {};
+            if (action === 'promote_admin') {
+                const updated = await group_message_service_1.groupMessageService.promoteAdmin(groupId, targetUserId);
+                res.json({ success: true, group: updated });
+                return;
+            }
+            if (action === 'remove_admin') {
+                const updated = await group_message_service_1.groupMessageService.removeAdmin(groupId, targetUserId);
+                res.json({ success: true, group: updated });
+                return;
+            }
             const updated = await group_message_service_1.groupMessageService.updateGroup(groupId, req.body);
             res.json({ success: true, group: updated });
         }
         catch (err) {
             console.error('[AdminGroupController updateGroup error]:', err);
             res.status(400).json({ success: false, error: err.message || 'Failed to update group' });
+        }
+    }
+    /**
+     * Promote a user to group admin
+     */
+    async promoteAdmin(req, res) {
+        try {
+            const groupId = (req.params.groupId || req.body.groupId || '').toLowerCase().trim();
+            const targetUserId = req.body.targetUserId || req.body.userId || req.body.identifier;
+            if (!groupId || !targetUserId) {
+                res.status(400).json({ success: false, error: 'groupId and targetUserId are required' });
+                return;
+            }
+            const updated = await group_message_service_1.groupMessageService.promoteAdmin(groupId, targetUserId);
+            res.json({ success: true, group: updated });
+        }
+        catch (err) {
+            res.status(400).json({ success: false, error: err.message || 'Failed to promote group admin' });
+        }
+    }
+    /**
+     * Remove a user from group admins
+     */
+    async removeAdmin(req, res) {
+        try {
+            const groupId = (req.params.groupId || req.body.groupId || '').toLowerCase().trim();
+            const targetUserId = req.params.userId || req.body.targetUserId || req.body.userId;
+            if (!groupId || !targetUserId) {
+                res.status(400).json({ success: false, error: 'groupId and userId are required' });
+                return;
+            }
+            const updated = await group_message_service_1.groupMessageService.removeAdmin(groupId, targetUserId);
+            res.json({ success: true, group: updated });
+        }
+        catch (err) {
+            res.status(400).json({ success: false, error: err.message || 'Failed to remove group admin' });
         }
     }
     /**

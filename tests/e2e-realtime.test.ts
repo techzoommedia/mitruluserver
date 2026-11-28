@@ -11,6 +11,7 @@ import { communityRoomService } from '../src/services/community-room.service';
 import { groupMessageService } from '../src/services/group-message.service';
 import { groupMessageRepository } from '../src/repositories/group-message.repository';
 import { ChatGroupModel } from '../src/models/chat-group.model';
+import { createApp } from '../src/app';
 
 const require = createRequire(import.meta.url);
 const { io: ioClient } = require(
@@ -405,6 +406,36 @@ describe('Mitrulu Real-Time & Call Corner-Case E2E Suite', () => {
       (ChatGroupModel as any).findOne = origFindOne;
       (groupMessageRepository as any).findMessageById = origFindById;
       (groupMessageRepository as any).createMessage = origCreate;
+    }
+  });
+
+  test('8. src and compiled dist apps mount /api/circle/call/incoming and /api/auth/me without 404', async () => {
+    const distAppPath = path.resolve(__dirname, '../dist/app.js');
+    const distMod = require(distAppPath);
+    const apps = [
+      { label: 'src/app', app: createApp() },
+      { label: 'dist/app', app: distMod.createApp() },
+    ];
+
+    for (const entry of apps) {
+      const appServer = http.createServer(entry.app);
+      await new Promise<void>((resolve) => appServer.listen(0, '127.0.0.1', () => resolve()));
+      try {
+        const port = (appServer.address() as any).port;
+        const incomingRes = await fetch(`http://127.0.0.1:${port}/api/circle/call/incoming`);
+        assert.equal(incomingRes.status, 200, `${entry.label} /api/circle/call/incoming status`);
+        const incomingJson: any = await incomingRes.json();
+        assert.equal(incomingJson.success, true);
+        assert.equal(incomingJson.hasIncomingCall, false);
+
+        const respondRes = await fetch(`http://127.0.0.1:${port}/api/circle/call/respond`);
+        assert.equal(respondRes.status, 400, `${entry.label} /api/circle/call/respond status`);
+
+        const authMeRes = await fetch(`http://127.0.0.1:${port}/api/auth/me`);
+        assert.notEqual(authMeRes.status, 404, `${entry.label} /api/auth/me should be mounted`);
+      } finally {
+        await new Promise<void>((resolve) => appServer.close(() => resolve()));
+      }
     }
   });
 });

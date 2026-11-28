@@ -20,6 +20,11 @@ router.get(['/api/circle/community/room-actions', '/api/circle/community/room-ac
 router.post(['/api/circle/community/room-actions', '/api/circle/community/room-actions/', '/circle/community/room-actions', '/circle/community/room-actions/'], (req, res) => circle_controller_1.circleController.postRoomActions(req, res));
 router.post(['/api/circle/active-status', '/api/circle/active-status/', '/circle/active-status', '/circle/active-status/'], (req, res) => circle_controller_1.circleController.updateActiveStatus(req, res));
 router.post(['/api/circle/call/token', '/api/circle/call/token/', '/circle/call/token', '/circle/call/token/'], (req, res) => circle_controller_1.circleController.getCallToken(req, res));
+router.get(['/api/circle/call/incoming', '/api/circle/call/incoming/', '/circle/call/incoming', '/circle/call/incoming/'], (req, res) => circle_controller_1.circleController.getIncomingCall(req, res));
+router.get(['/api/circle/call/respond', '/api/circle/call/respond/', '/circle/call/respond', '/circle/call/respond/'], (req, res) => circle_controller_1.circleController.getCallRespondStatus(req, res));
+router.post(['/api/circle/call/respond', '/api/circle/call/respond/', '/circle/call/respond', '/circle/call/respond/'], (req, res) => circle_controller_1.circleController.respondToCallHttp(req, res));
+router.post(['/api/circle/call/start', '/api/circle/call/start/', '/circle/call/start', '/circle/call/start/'], (req, res) => circle_controller_1.circleController.startCallHttp(req, res));
+router.post(['/api/circle/call/timeout', '/api/circle/call/timeout/', '/circle/call/timeout', '/circle/call/timeout/'], (req, res) => circle_controller_1.circleController.timeoutCallHttp(req, res));
 router.get(['/api/circle/call/history', '/api/circle/call/history/', '/circle/call/history', '/circle/call/history/'], (req, res) => circle_controller_1.circleController.getCallHistory(req, res));
 router.post(['/api/circle/call/end', '/api/circle/call/end/', '/circle/call/end', '/circle/call/end/'], (req, res) => circle_controller_1.circleController.endCallHttp(req, res));
 // Internal Next.js <-> Server notification routes

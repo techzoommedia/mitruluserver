@@ -66,18 +66,19 @@ class GroupMessageController {
         try {
             const groupId = (req.params.groupId || req.body.groupId || 'telugu').toLowerCase();
             const { text, senderId, senderName, senderAvatar, senderHandle, senderTeluguName, mediaUrl, mediaType, id, timestamp } = req.body;
+            const resolvedSenderId = senderId || (0, message_controller_1.getAuthUserId)(req);
             if (!text && !mediaUrl) {
                 res.status(400).json({ success: false, error: 'Text or media is required' });
                 return;
             }
-            if (!senderId) {
+            if (!resolvedSenderId) {
                 res.status(400).json({ success: false, error: 'senderId is required' });
                 return;
             }
             const message = await group_message_service_1.groupMessageService.sendGroupMessage({
                 id,
                 groupId,
-                senderId,
+                senderId: resolvedSenderId,
                 senderName: senderName || 'Mitrulu Member',
                 senderAvatar,
                 senderHandle,
